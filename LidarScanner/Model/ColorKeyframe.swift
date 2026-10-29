@@ -8,23 +8,32 @@ struct ColorKeyframe: Sendable {
     var viewMatrix: simd_float4x4
     var intrinsics: simd_float3x3
     var cameraPosition: SIMD3<Float>
+    var depth: [Float] = []
+    var depthWidth: Int = 0
+    var depthHeight: Int = 0
+    /// Recorded mean-luma correction. Not applied: the camera's sRGB sample is the room color.
+    var exposureScale: Float = 1
 
-    static func make(from frame: ARFrame, maxDimension: Int = 256) -> ColorKeyframe? {
-        guard let image = PixelSampler.rgbaImage(from: frame.capturedImage, maxDimension: maxDimension) else {
+    static func make(from frame: ARFrame, maxDimension: Int = 320) -> ColorKeyframe? {
+        let resolution = frame.camera.imageResolution
+        guard let image = PixelSampler.rgbaImage(
+            from: frame.capturedImage,
+            maxDimension: maxDimension,
+            imageResolution: resolution
+        ) else {
             return nil
         }
-        let sourceWidth = Float(CVPixelBufferGetWidth(frame.capturedImage))
-        let sourceHeight = Float(CVPixelBufferGetHeight(frame.capturedImage))
-        guard sourceWidth > 0, sourceHeight > 0 else { return nil }
+        guard resolution.width > 1, resolution.height > 1 else { return nil }
 
-        let scaleX = Float(image.width) / sourceWidth
-        let scaleY = Float(image.height) / sourceHeight
+        let scaleX = Float(image.width) / Float(resolution.width)
+        let scaleY = Float(image.height) / Float(resolution.height)
         var intrinsics = frame.camera.intrinsics
         intrinsics.columns.0.x *= scaleX
         intrinsics.columns.1.y *= scaleY
         intrinsics.columns.2.x *= scaleX
         intrinsics.columns.2.y *= scaleY
 
+        let depthImage = PixelSampler.depthImage(from: frame.smoothedSceneDepth ?? frame.sceneDepth, maxDimension: 160)
         let camera = frame.camera.transform.columns.3
         return ColorKeyframe(
             rgba: image.rgba,
@@ -32,7 +41,11 @@ struct ColorKeyframe: Sendable {
             height: image.height,
             viewMatrix: frame.camera.viewMatrix(for: .landscapeRight),
             intrinsics: intrinsics,
-            cameraPosition: SIMD3(camera.x, camera.y, camera.z)
+            cameraPosition: SIMD3(camera.x, camera.y, camera.z),
+            depth: depthImage?.values ?? [],
+            depthWidth: depthImage?.width ?? 0,
+            depthHeight: depthImage?.height ?? 0,
+            exposureScale: image.exposureScale
         )
     }
 
@@ -51,11 +64,35 @@ struct ColorKeyframe: Sendable {
         let towardCamera = cameraPosition - world
         let distance = simd_length(towardCamera)
         guard distance > 0.05 else { return nil }
-        let facing = simd_dot(normal, towardCamera / distance)
-        guard facing > 0.2 else { return nil }
+        let normalLength = simd_length(normal)
+        let facing: Float
+        if normalLength > 0.15 {
+            facing = simd_dot(normal / normalLength, towardCamera / distance)
+            // Grazing views are noisy, but a strict cutoff left large gray holes.
+            guard facing > 0.12 else { return nil }
+        } else {
+            facing = 0.2
+        }
+        if let depth = depthAt(u: u, v: v) {
+            let vertexDepth = -cameraSpace.z
+            // LiDAR and the mesh disagree by several centimeters on the same surface.
+            // Only reject when a clearly closer surface occupies this pixel.
+            let slack = max(0.15, depth * 0.08)
+            if vertexDepth > depth + slack { return nil }
+        }
 
-        let score = facing / (0.35 + distance)
+        let score = facing / (0.25 + distance)
+        // Keep the camera's sRGB values. A second exposure scale, and a later
+        // lighting multiply in the viewer, both wash the room color out.
         return (score, bilinear(u, v))
+    }
+
+    private func depthAt(u: Float, v: Float) -> Float? {
+        guard depthWidth > 1, depthHeight > 1, depth.count >= depthWidth * depthHeight else { return nil }
+        let x = min(depthWidth - 1, max(0, Int(u / Float(width) * Float(depthWidth))))
+        let y = min(depthHeight - 1, max(0, Int(v / Float(height) * Float(depthHeight))))
+        let sample = depth[y * depthWidth + x]
+        return sample > 0.05 ? sample : nil
     }
 
     /// Visibility of a point from this camera, without a surface normal. Used to pick a few candidate frames per region.
@@ -108,7 +145,7 @@ final class KeyframeBuffer: @unchecked Sendable {
     private var accepting = false
     private let limit: Int
 
-    init(limit: Int = 16) {
+    init(limit: Int = 24) {
         self.limit = limit
     }
 

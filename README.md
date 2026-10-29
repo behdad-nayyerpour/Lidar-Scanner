@@ -12,14 +12,14 @@ Bundle identifier: `com.example.lidarscanner` (change it in `project.yml` before
 
 - Scan a room with ARKit scene reconstruction. Covered surfaces show a triangle wireframe and a semi-transparent color fill over the camera. A control switches that to fill only or hides it.
 - Guidance while you scan: pace, light, tracking, and how much surface area has been meshed. Start, pause, resume, restart, and finish.
-- Finish saves the geometry immediately. Camera frames are stored with the scan (capped at 16 small images). Add Color, from the viewer or the library, paints vertex color in the background with progress and cancel.
+- Finish saves the geometry immediately. Camera frames are stored with the scan (up to 24 images, plus a LiDAR depth map when the phone provides one). Add Color, from the viewer or the library, paints vertex color in the background with progress and cancel.
 - Scan an object two ways:
   - **LiDAR object** — a bounds sphere you place in the room (furniture, fixtures).
   - **Photo object** — RealityKit guided capture, then on-device photogrammetry. iOS only builds the mobile (reduced) detail level; finer levels need a Mac.
 - Crop (triangles are clipped, not only deleted), smooth, simplify by merging nearby vertices, and drop small disconnected fragments. Revert to the original mesh.
 - Measure distance by tapping two points. Units: meters, centimeters, feet, or inches.
-- Export **PLY** (vertex color), **OBJ** (zip with MTL and a baked texture when it fits), **STL** (millimeters or meters, optional Z-up), **USDZ**, and **GLB**.
-- A scan library with thumbnails, rename, delete, a SceneKit viewer, and AR Quick Look.
+- Export **PLY** (vertex color), **OBJ** (zip with MTL and a baked texture when it fits), **STL** and **DXF** (millimeters or meters, optional Z-up), **USDZ**, and **GLB**.
+- A scan library with thumbnails, rename, delete, a SceneKit viewer (shaded uncolored mesh, background and mesh color, optional wireframe), and an AR preview with a Close button back to the viewer.
 - Onboarding, light and dark mode, and English strings in `Localizable.strings` so another language (Persian is a likely next one) can be added as `fa.lproj` without rewriting the UI. Layout uses leading and trailing edges.
 
 Files also show up in the Files app under On My iPhone → Lidar Scanner, because document sharing is enabled. That is an Info.plist flag, not a restricted entitlement.
@@ -33,13 +33,13 @@ LidarScanner/
   Localization/         L10n keys; English table is Resources/en.lproj
   Scanning/             ARKit room/object LiDAR session and Object Capture
   Mesh/                 Weld, clip, smooth, cluster decimation, PLY, texture bake
-  Export/               OBJ, STL, USDZ, GLB, and USDZ mesh extraction
+  Export/               OBJ, STL, DXF, USDZ, GLB, and USDZ mesh extraction
   Persistence/          Documents/Scans/<uuid>/
-  Viewer/               SceneKit preview, measure, process, export, Quick Look
+  Viewer/               SceneKit preview, measure, process, export, AR preview
   Onboarding/           First-launch pages
 ```
 
-A room or LiDAR-object scan copies `ARMeshAnchor` geometry into a `ScanMesh` (positions, normals, vertex colors, triangle indices, per-face classification). Finish welds nearby vertices and saves the gray mesh immediately. Up to 16 downscaled camera frames, with view matrices and intrinsics, are stored in `colorframes.bin`. Add Color bins the mesh into a spatial grid and samples only the few frames that can see each cell, then updates the same PLY. Textured exports bake those vertex colors into an atlas without copying the whole image for every triangle.
+A room or LiDAR-object scan copies `ARMeshAnchor` geometry into a `ScanMesh` (positions, normals, vertex colors, triangle indices, per-face classification). Finish welds nearby vertices and saves the gray mesh immediately. Up to 24 downscaled camera frames, with view matrices, intrinsics, and LiDAR depth when available, are stored in `colorframes.bin`. Add Color picks one frame per vertex, skips vertices hidden behind the mesh, and updates the same PLY. Textured exports bake those vertex colors into an atlas without copying the whole image for every triangle.
 
 Photo object capture writes Apple's images into the scan folder first, so a failed or interrupted reconstruction can be rebuilt from the library. The photogrammetry USDZ is kept as `capture.usdz`. The in-app tools use an extracted mesh when extraction succeeds.
 
@@ -56,7 +56,7 @@ Documents/Scans/<uuid>/
   colorframes.bin       room and LiDAR object scans
 ```
 
-Coordinates are meters, Y-up, except STL when you choose millimeters and/or Z-up.
+Coordinates are meters, Y-up, except STL and DXF when you choose millimeters and/or Z-up. DXF is an R12 file of `3DFACE` triangles on layer `MESH`.
 
 ## CI build
 
@@ -115,7 +115,7 @@ User-facing copy goes through `L10n` and `LidarScanner/Resources/en.lproj/Locali
 ## Not in this version
 
 - Accounts, cloud sync, or a collaboration link.
-- A floor plan, CAD, or BIM export. Classification is stored and can be shown in the viewer; it is not exported as a separate semantic file.
+- A floor plan or BIM export. The mesh itself exports as DXF triangle faces. Classification is stored and can be shown in the viewer; it is not exported as a separate semantic file.
 - A photo-quality UV unwrap of the original camera images for room scans. Color is sampled onto vertices, then baked into a texture atlas for formats that expect a texture.
 - Area or volume measurement (distance only).
 - Gaussian splats or NeRF.
@@ -129,13 +129,13 @@ Object Capture is included, not replaced by LiDAR. LiDAR object mode is still th
 CI only compiles the app. LiDAR, the camera, and photogrammetry have to be checked on hardware.
 
 1. Install with AltStore on a LiDAR iPhone and allow the camera.
-2. Room scan: finish, and confirm the gray mesh appears within a few seconds. Tap Add Color, watch the progress, and try cancel. A finished color pass should update the same scan.
+2. Room scan: finish, and confirm the gray mesh appears within a few seconds on a dark background, with shading that shows the shape. Open Appearance to change the background and the uncolored mesh color, and turn on the wireframe overlay. Tap Add Color and let it finish (cancel still works). Color an existing scan again after this update; older saved frames have no depth map. The new pass should keep colors off surfaces the camera could not see.
 3. Walk slowly and overlap surfaces. Glass, mirrors, and very dark materials will have holes.
 4. LiDAR object mode: set the center, change the radius, and confirm the saved mesh is limited to that volume.
-5. Photo object mode, if the device offers it: complete a lap and wait with the app open while the mobile-detail model builds. Then open the result and try AR Quick Look.
+5. Photo object mode, if the device offers it: complete a lap and wait with the app open while the mobile-detail model builds. Then open the result, enter AR, and use Close to return to the viewer.
 6. Measure two points and compare with a tape measure.
 7. Crop, smooth, simplify, remove fragments, then revert.
-8. Export each format and open it on a computer (Blender, MeshLab, a slicer, or Quick Look).
+8. Export each format, including DXF, and open it on a computer (Blender, MeshLab, AutoCAD or another CAD app, a slicer, or Quick Look).
 9. Rename, delete, and confirm the scan folder in Files.
 10. If you have a non-LiDAR iPhone, confirm it installs and shows the “no LiDAR” explanation instead of crashing.
 11. Check the library in both light and dark mode.

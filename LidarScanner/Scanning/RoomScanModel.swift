@@ -347,6 +347,11 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         }
         config.planeDetection = [.horizontal, .vertical]
         config.isAutoFocusEnabled = true
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+            config.frameSemantics.insert(.smoothedSceneDepth)
+        } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            config.frameSemantics.insert(.sceneDepth)
+        }
         configuration = config
         sceneView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
     }

@@ -53,7 +53,7 @@ enum SurfaceClass {
 }
 
 extension ScanMesh {
-    func makeGeometry(mode: ViewerColorMode, lit: Bool, wireframe: Bool) -> SCNGeometry {
+    func makeGeometry(mode: ViewerColorMode, lit: Bool, wireframe: Bool, solidColor: UIColor? = nil) -> SCNGeometry {
         switch mode {
         case .vertex:
             return makeIndexedGeometry(
@@ -62,7 +62,8 @@ extension ScanMesh {
                 colors: colors.count == positions.count ? colors : [SIMD3<Float>](repeating: SIMD3(repeating: 0.72), count: positions.count),
                 indices: indices,
                 lit: lit,
-                wireframe: wireframe
+                wireframe: wireframe,
+                solidColor: solidColor
             )
         case .classification:
             var expandedPositions: [SIMD3<Float>] = []
@@ -105,13 +106,16 @@ extension ScanMesh {
         colors: [SIMD3<Float>],
         indices: [UInt32],
         lit: Bool,
-        wireframe: Bool
+        wireframe: Bool,
+        solidColor: UIColor? = nil
     ) -> SCNGeometry {
-        let sources = [
+        var sources = [
             geometrySource(Packed.float3Data(positions), semantic: .vertex, components: 3),
-            geometrySource(Packed.float3Data(normals), semantic: .normal, components: 3),
-            geometrySource(Packed.float3Data(colors), semantic: .color, components: 3)
+            geometrySource(Packed.float3Data(normals), semantic: .normal, components: 3)
         ]
+        if solidColor == nil {
+            sources.append(geometrySource(Packed.float3Data(colors), semantic: .color, components: 3))
+        }
         let element = SCNGeometryElement(
             data: Packed.indexData(indices),
             primitiveType: .triangles,
@@ -120,8 +124,8 @@ extension ScanMesh {
         )
         let geometry = SCNGeometry(sources: sources, elements: [element])
         let material = SCNMaterial()
-        material.lightingModel = lit ? .lambert : .constant
-        material.diffuse.contents = UIColor.white
+        material.lightingModel = wireframe ? .constant : (lit ? .lambert : .constant)
+        material.diffuse.contents = solidColor ?? UIColor.white
         material.isDoubleSided = true
         material.locksAmbientWithDiffuse = true
         if wireframe {
@@ -201,9 +205,9 @@ extension BakedTexture {
 }
 
 enum SceneFraming {
-    static func prepare(_ scene: SCNScene, background: UIColor) {
+    static func prepare(_ scene: SCNScene, background: UIColor, sculpted: Bool = false) {
         scene.rootNode.childNodes.filter { $0.name == "camera" }.forEach { $0.removeFromParentNode() }
-        addLights(to: scene)
+        addLights(to: scene, sculpted: sculpted)
         let cameraNode = SCNNode()
         cameraNode.name = "camera"
         let camera = SCNCamera()
@@ -261,23 +265,31 @@ enum SceneFraming {
         return AABB(min: minV, max: maxV)
     }
 
-    private static func addLights(to scene: SCNScene) {
+    private static func addLights(to scene: SCNScene, sculpted: Bool) {
         scene.rootNode.childNodes.filter { $0.name == "light" }.forEach { $0.removeFromParentNode() }
         let ambient = SCNNode()
         ambient.name = "light"
         ambient.light = SCNLight()
         ambient.light?.type = .ambient
-        ambient.light?.intensity = 950
+        ambient.light?.intensity = sculpted ? 280 : 220
         ambient.light?.color = UIColor.white
         scene.rootNode.addChildNode(ambient)
 
-        let directional = SCNNode()
-        directional.name = "light"
-        directional.light = SCNLight()
-        directional.light?.type = .directional
-        directional.light?.intensity = 650
-        directional.eulerAngles = SCNVector3(-0.7, 0.5, 0)
-        scene.rootNode.addChildNode(directional)
+        let key = SCNNode()
+        key.name = "light"
+        key.light = SCNLight()
+        key.light?.type = .directional
+        key.light?.intensity = sculpted ? 1100 : 650
+        key.eulerAngles = SCNVector3(-0.8, 0.55, 0)
+        scene.rootNode.addChildNode(key)
+
+        let fill = SCNNode()
+        fill.name = "light"
+        fill.light = SCNLight()
+        fill.light?.type = .directional
+        fill.light?.intensity = sculpted ? 420 : 220
+        fill.eulerAngles = SCNVector3(0.4, -1.2, 0)
+        scene.rootNode.addChildNode(fill)
     }
 }
 

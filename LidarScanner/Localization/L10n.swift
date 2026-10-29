@@ -199,13 +199,29 @@ enum L10n {
     static var exportGLB: String { tr("export.glb", "GLB") }
     static var exportGLBDetail: String { tr("export.glb.detail", "glTF binary for game engines and web viewers.") }
     static var exportAll: String { tr("export.all", "All formats") }
-    static var exportAllDetail: String { tr("export.all.detail", "One zip with OBJ, PLY, STL, USDZ, and GLB.") }
+    static var exportAllDetail: String { tr("export.all.detail", "One zip with OBJ, PLY, STL, DXF, USDZ, and GLB.") }
     static var exportMillimeters: String { tr("export.mm", "Millimeters") }
     static var exportMeters: String { tr("export.m", "Meters") }
     static var exportZUp: String { tr("export.zUp", "Z-up for 3D printing") }
     static var exportWorking: String { tr("export.working", "Preparing the file") }
     static var exportFailed: String { tr("export.failed", "The file could not be created.") }
     static var exportSTLUnits: String { tr("export.stlUnits", "STL units") }
+    static var exportCADUnits: String { tr("export.cadUnits", "Units for STL and DXF") }
+    static var exportDXF: String { tr("export.dxf", "DXF") }
+    static var exportDXFDetail: String { tr("export.dxf.detail", "Triangle faces for AutoCAD and other CAD apps. Uses the units and Z-up setting above.") }
+    static var viewerAppearance: String { tr("viewer.appearance", "Appearance") }
+    static var viewerBackground: String { tr("viewer.background", "Background") }
+    static var viewerMeshColor: String { tr("viewer.meshColor", "Uncolored mesh") }
+    static var viewerMeshColorHelp: String { tr("viewer.meshColor.help", "Used before color is added. Shading stays on so the shape stays readable.") }
+    static var backdropDark: String { tr("viewer.backdrop.dark", "Dark") }
+    static var backdropLight: String { tr("viewer.backdrop.light", "Light") }
+    static var backdropCustom: String { tr("viewer.backdrop.custom", "Custom") }
+    static var tintClay: String { tr("viewer.tint.clay", "Clay") }
+    static var tintWhite: String { tr("viewer.tint.white", "White") }
+    static var tintSlate: String { tr("viewer.tint.slate", "Slate") }
+    static var arClose: String { tr("ar.close", "Close") }
+    static var arHint: String { tr("ar.hint", "Move the phone to place the model in the room.") }
+    static var arFailed: String { tr("ar.failed", "The model could not be opened in AR.") }
 
     static var settingsTitle: String { tr("settings.title", "Settings") }
     static var settingsUnits: String { tr("settings.units", "Units") }

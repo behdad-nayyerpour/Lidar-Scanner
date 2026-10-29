@@ -444,7 +444,8 @@ enum GeometryArchive {
                 Log.scan.error("color frame save failed \(error.localizedDescription, privacy: .public)")
             }
         }
-        let thumbnail = ThumbnailRenderer.image(mesh: mesh)
+        let clay = UIColor(red: 0.78, green: 0.64, blue: 0.50, alpha: 1)
+        let thumbnail = ThumbnailRenderer.image(mesh: mesh, solidColor: clay)
         if let data = thumbnail?.pngData() {
             try? data.write(to: paths.thumbnail, options: .atomic)
         }
@@ -474,21 +475,21 @@ enum GeometryArchive {
 }
 
 enum ThumbnailRenderer {
-    static func image(mesh: ScanMesh) -> UIImage? {
+    static func image(mesh: ScanMesh, solidColor: UIColor? = nil) -> UIImage? {
         let scene = SCNScene()
-        let node = SCNNode(geometry: mesh.makeGeometry(mode: .vertex, lit: false, wireframe: false))
+        let node = SCNNode(geometry: mesh.makeGeometry(mode: .vertex, lit: solidColor != nil, wireframe: false, solidColor: solidColor))
         node.name = "scanMesh"
         scene.rootNode.addChildNode(node)
-        return render(scene)
+        return render(scene, sculpted: solidColor != nil)
     }
 
     static func image(usdz: URL) -> UIImage? {
         guard let scene = try? SCNScene(url: usdz, options: nil) else { return nil }
-        return render(scene)
+        return render(scene, sculpted: false)
     }
 
-    private static func render(_ scene: SCNScene) -> UIImage? {
-        SceneFraming.prepare(scene, background: UIColor(red: 0.90, green: 0.92, blue: 0.94, alpha: 1))
+    private static func render(_ scene: SCNScene, sculpted: Bool) -> UIImage? {
+        SceneFraming.prepare(scene, background: UIColor(red: 0.09, green: 0.11, blue: 0.13, alpha: 1), sculpted: sculpted)
         guard let device = MTLCreateSystemDefaultDevice() else { return nil }
         let renderer = SCNRenderer(device: device, options: nil)
         renderer.scene = scene

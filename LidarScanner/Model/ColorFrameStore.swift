@@ -2,9 +2,9 @@ import Foundation
 import simd
 
 enum ColorFrameStore {
-    static let maxFrames = 16
-    static let maxDimension = 256
-    static let maxBytes = 8_000_000
+    static let maxFrames = 24
+    static let maxDimension = 320
+    static let maxBytes = 14_000_000
     private static let magic: UInt32 = 0x4643534C // "LSCF" little endian bytes L S C F if we write ASCII... we'll write the four chars explicitly.
 
     static func write(_ frames: [ColorKeyframe], to url: URL) throws {
@@ -16,7 +16,7 @@ enum ColorFrameStore {
 
         var data = Data()
         data.append(contentsOf: [0x4C, 0x53, 0x43, 0x46]) // LSCF
-        data.appendLE(UInt16(1))
+        data.appendLE(UInt16(2))
         data.appendLE(UInt16(prepared.count))
         for frame in prepared {
             guard frame.width > 0, frame.height > 0, frame.width <= 512, frame.height <= 512 else { continue }
@@ -24,10 +24,19 @@ enum ColorFrameStore {
             guard frame.rgba.count >= expected else { continue }
             data.appendLE(UInt16(frame.width))
             data.appendLE(UInt16(frame.height))
+            data.appendLE(UInt16(frame.depthWidth))
+            data.appendLE(UInt16(frame.depthHeight))
             data.append(frame.cameraPosition)
             append(frame.viewMatrix, to: &data)
             append(frame.intrinsics, to: &data)
+            data.appendLE(frame.exposureScale.bitPattern)
             data.append(contentsOf: frame.rgba.prefix(expected))
+            let depthCount = frame.depthWidth * frame.depthHeight
+            if depthCount > 0, frame.depth.count >= depthCount {
+                for value in frame.depth.prefix(depthCount) {
+                    data.appendLE(value.bitPattern)
+                }
+            }
         }
         try data.write(to: url, options: .atomic)
     }
@@ -38,7 +47,7 @@ enum ColorFrameStore {
         guard data[0] == 0x4C, data[1] == 0x53, data[2] == 0x43, data[3] == 0x46 else { throw ScanError.unreadableMesh }
         var cursor = 4
         let version = try data.readUInt16(&cursor)
-        guard version == 1 else { throw ScanError.unreadableMesh }
+        guard version == 1 || version == 2 else { throw ScanError.unreadableMesh }
         let count = Int(try data.readUInt16(&cursor))
         guard count >= 0, count <= maxFrames else { throw ScanError.unreadableMesh }
         var frames: [ColorKeyframe] = []
@@ -47,20 +56,46 @@ enum ColorFrameStore {
             let width = Int(try data.readUInt16(&cursor))
             let height = Int(try data.readUInt16(&cursor))
             guard width > 0, height > 0, width <= 512, height <= 512 else { throw ScanError.unreadableMesh }
+            var depthWidth = 0
+            var depthHeight = 0
+            if version == 2 {
+                depthWidth = Int(try data.readUInt16(&cursor))
+                depthHeight = Int(try data.readUInt16(&cursor))
+                guard depthWidth >= 0, depthHeight >= 0, depthWidth <= 512, depthHeight <= 512 else { throw ScanError.unreadableMesh }
+            }
             let camera = try data.readFloat3(&cursor)
             let view = try readMatrix4(&cursor, data)
             let intrinsics = try readMatrix3(&cursor, data)
+            let exposure: Float
+            if version == 2 {
+                exposure = try data.readFloat(cursor: &cursor)
+            } else {
+                exposure = 1
+            }
             let byteCount = width * height * 4
             guard cursor + byteCount <= data.count else { throw ScanError.unreadableMesh }
             let rgba = [UInt8](data[cursor..<(cursor + byteCount)])
             cursor += byteCount
+            var depth: [Float] = []
+            let depthCount = depthWidth * depthHeight
+            if depthCount > 0 {
+                guard cursor + depthCount * 4 <= data.count else { throw ScanError.unreadableMesh }
+                depth.reserveCapacity(depthCount)
+                for _ in 0..<depthCount {
+                    depth.append(try data.readFloat(cursor: &cursor))
+                }
+            }
             frames.append(ColorKeyframe(
                 rgba: rgba,
                 width: width,
                 height: height,
                 viewMatrix: view,
                 intrinsics: intrinsics,
-                cameraPosition: camera
+                cameraPosition: camera,
+                depth: depth,
+                depthWidth: depthWidth,
+                depthHeight: depthHeight,
+                exposureScale: exposure.isFinite ? exposure : 1
             ))
         }
         return frames
@@ -99,7 +134,11 @@ enum ColorFrameStore {
             height: height,
             viewMatrix: frame.viewMatrix,
             intrinsics: intrinsics,
-            cameraPosition: frame.cameraPosition
+            cameraPosition: frame.cameraPosition,
+            depth: frame.depth,
+            depthWidth: frame.depthWidth,
+            depthHeight: frame.depthHeight,
+            exposureScale: frame.exposureScale
         )
     }
 

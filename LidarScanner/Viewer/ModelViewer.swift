@@ -1,4 +1,3 @@
-import QuickLook
 import SceneKit
 import simd
 import SwiftUI
@@ -18,6 +17,11 @@ final class ViewerModel: NSObject, ObservableObject, SCNSceneRendererDelegate {
     @Published var shaded = false
     @Published var showClasses = false
     @Published var wireframe = false
+    @Published var backdrop: ViewerBackdrop = .dark
+    @Published var uncoloredTint: UncoloredTint = .clay
+    @Published var customBackdrop = UIColor(red: 0.11, green: 0.13, blue: 0.16, alpha: 1)
+    @Published var customTint = UIColor(red: 0.77, green: 0.64, blue: 0.52, alpha: 1)
+    private var meshIsColored = false
     @Published var labels: [MeasureLabel] = []
     @Published var measurements: [StoredMeasurement] = []
     @Published var triangleCount = 0
@@ -33,8 +37,10 @@ final class ViewerModel: NSObject, ObservableObject, SCNSceneRendererDelegate {
     private var lastLabelUpdate: TimeInterval = 0
     var onMeasurementsChange: (([StoredMeasurement]) -> Void)?
 
-    func show(mesh: ScanMesh) {
+    func show(mesh: ScanMesh, colored: Bool) {
         self.mesh = mesh
+        meshIsColored = colored
+        if colored { shaded = false }
         usingUSDZ = false
         triangleCount = mesh.triangleCount
         vertexCount = mesh.positions.count
@@ -109,17 +115,46 @@ final class ViewerModel: NSObject, ObservableObject, SCNSceneRendererDelegate {
         }
     }
 
+    var backdropColor: UIColor { backdrop.color(custom: customBackdrop) }
+    var uncoloredColor: UIColor { uncoloredTint.color(custom: customTint) }
+
     private func scene(for mesh: ScanMesh) -> SCNScene {
         let scene = SCNScene()
         let mode: ViewerColorMode = showClasses ? .classification : .vertex
-        let node = SCNNode(geometry: mesh.makeGeometry(mode: mode, lit: shaded && !showClasses, wireframe: wireframe))
+        let solid = (!meshIsColored && mode == .vertex) ? uncoloredColor : nil
+        let surface = mesh.makeGeometry(
+            mode: mode,
+            lit: solid != nil || (shaded && mode == .vertex),
+            wireframe: false,
+            solidColor: solid
+        )
+        let node = SCNNode(geometry: surface)
         node.name = "scanMesh"
+        if wireframe {
+            let lines = mesh.makeGeometry(mode: mode, lit: false, wireframe: true, solidColor: wireColor)
+            let wire = SCNNode(geometry: lines)
+            wire.name = "wireOverlay"
+            wire.renderingOrder = 10
+            wire.simdScale = SIMD3(repeating: 1.003)
+            node.addChildNode(wire)
+        }
         scene.rootNode.addChildNode(node)
         return scene
     }
 
+    private var wireColor: UIColor {
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        backdropColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        let luma = 0.3 * red + 0.59 * green + 0.11 * blue
+        return luma > 0.55 ? UIColor(white: 0.12, alpha: 1) : UIColor(white: 0.92, alpha: 1)
+    }
+
     private func install(scene: SCNScene) {
-        SceneFraming.prepare(scene, background: .clear)
+        SceneFraming.prepare(scene, background: backdropColor, sculpted: !usingUSDZ && !meshIsColored && !showClasses)
+        sceneView.backgroundColor = backdropColor
         sceneView.scene = scene
         sceneView.pointOfView = scene.rootNode.childNode(withName: "camera", recursively: true)
         sceneView.allowsCameraControl = true
@@ -214,12 +249,12 @@ final class ViewerModel: NSObject, ObservableObject, SCNSceneRendererDelegate {
 struct ModelViewer: View {
     let scanID: UUID
     @EnvironmentObject private var library: ScanLibrary
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model = ViewerModel()
     @State private var showProcess = false
     @State private var showExport = false
     @State private var showQuickLook = false
+    @State private var showAppearance = false
     @State private var showStats = false
     @State private var confirmRevert = false
     @State private var renameText = ""
@@ -237,7 +272,7 @@ struct ModelViewer: View {
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .topLeading) {
-                ModelSceneView(model: model, colorScheme: colorScheme)
+                ModelSceneView(model: model)
                 ForEach(model.labels) { label in
                     Text(label.text)
                         .font(.caption.weight(.bold))
@@ -300,11 +335,11 @@ struct ModelViewer: View {
         .sheet(isPresented: $showExport) {
             ExportSheet(scanID: scanID)
         }
-        .sheet(isPresented: $showQuickLook) {
-            if let quickLookURL {
-                QuickLookPreview(url: quickLookURL)
-                    .ignoresSafeArea()
-            }
+        .fullScreenCover(isPresented: $showQuickLook) {
+            ARScanPreview(url: quickLookURL, mesh: model.currentMesh, colored: library.record(scanID)?.isColored == true)
+        }
+        .sheet(isPresented: $showAppearance) {
+            ViewerAppearanceSheet(model: model)
         }
         .sheet(isPresented: $showStats) { statsSheet }
         .alert(L10n.libraryRename, isPresented: $renaming) {
@@ -339,9 +374,12 @@ struct ModelViewer: View {
                     renameText = record?.name ?? ""
                     renaming = true
                 }
-                Toggle(L10n.viewerLighting, isOn: $model.shaded)
+                if record?.isColored == true {
+                    Toggle(L10n.viewerLighting, isOn: $model.shaded)
+                }
                 Toggle(L10n.viewerClasses, isOn: $model.showClasses)
                 Toggle(L10n.viewerWire, isOn: $model.wireframe)
+                Button(L10n.viewerAppearance, systemImage: "paintpalette") { showAppearance = true }
                 Button(L10n.viewerReset, systemImage: "viewfinder") { model.resetCamera() }
                 Button(L10n.viewerStats, systemImage: "info.circle") { showStats = true }
                 if library.paths(for: scanID).exists(library.paths(for: scanID).original) {
@@ -398,8 +436,7 @@ struct ModelViewer: View {
                 else { alertText = L10n.viewerProcessUnavailable }
             }
             barButton(L10n.viewerQuickLook, "arkit", active: false) {
-                if quickLookURL != nil { showQuickLook = true }
-                else { alertText = L10n.viewerNoQuickLook }
+                showQuickLook = true
             }
             barButton(L10n.viewerExport, "square.and.arrow.up", active: false) {
                 showExport = true
@@ -481,7 +518,7 @@ struct ModelViewer: View {
                 let mesh = try await Task.detached(priority: .userInitiated) {
                     try MeshIO.read(from: meshURL)
                 }.value
-                model.show(mesh: mesh)
+                model.show(mesh: mesh, colored: record?.isColored == true)
             } catch {
                 model.errorText = error.localizedDescription
                 model.isLoading = false
@@ -497,7 +534,7 @@ struct ModelViewer: View {
     private func apply(_ mesh: ScanMesh) {
         do {
             try library.replaceMesh(id: scanID, mesh: mesh)
-            model.show(mesh: mesh)
+            model.show(mesh: mesh, colored: library.record(scanID)?.isColored == true)
         } catch {
             alertText = error.localizedDescription
         }
@@ -515,11 +552,11 @@ struct ModelViewer: View {
 
 private struct ModelSceneView: UIViewRepresentable {
     @ObservedObject var model: ViewerModel
-    var colorScheme: ColorScheme
 
     func makeUIView(context: Context) -> SCNView {
         let view = model.sceneView
         view.antialiasingMode = .multisampling4X
+        view.backgroundColor = model.backdropColor
         view.allowsCameraControl = true
         let tap = UITapGestureRecognizer(target: model, action: #selector(ViewerModel.handleTap(_:)))
         tap.cancelsTouchesInView = false
@@ -529,9 +566,7 @@ private struct ModelSceneView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: SCNView, context: Context) {
-        uiView.backgroundColor = colorScheme == .dark
-            ? UIColor(red: 0.055, green: 0.078, blue: 0.094, alpha: 1)
-            : UIColor(red: 0.925, green: 0.933, blue: 0.941, alpha: 1)
+        uiView.backgroundColor = model.backdropColor
     }
 }
 
@@ -676,7 +711,7 @@ struct ExportSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section(L10n.exportSTLUnits) {
+                Section(L10n.exportCADUnits) {
                     Picker(L10n.exportSTLUnits, selection: $millimeters) {
                         Text(L10n.exportMillimeters).tag(true)
                         Text(L10n.exportMeters).tag(false)
@@ -687,6 +722,7 @@ struct ExportSheet: View {
                 exportRow(L10n.exportPLY, L10n.exportPLYDetail) { try await exportPLY() }
                 exportRow(L10n.exportOBJ, L10n.exportOBJDetail) { try await exportOBJ() }
                 exportRow(L10n.exportSTL, L10n.exportSTLDetail) { try await exportSTL() }
+                exportRow(L10n.exportDXF, L10n.exportDXFDetail) { try await exportDXF() }
                 exportRow(L10n.exportUSDZ, L10n.exportUSDZDetail) { try await exportUSDZ() }
                 exportRow(L10n.exportGLB, L10n.exportGLBDetail) { try await exportGLB() }
                 if library.paths(for: scanID).exists(library.paths(for: scanID).capture) {
@@ -807,6 +843,11 @@ struct ExportSheet: View {
         return SharePayload(urls: [copy], cleanup: folder)
     }
 
+    private func exportDXF() async throws {
+        let mesh = try await loadMesh()
+        share = try stage("\(baseName()).dxf", MeshExporter.dxfData(mesh: mesh, millimeters: millimeters, zUp: zUp))
+    }
+
     private func exportGLB() async throws {
         let mesh = try await loadMesh()
         share = try stage("\(baseName()).glb", try MeshExporter.glbData(mesh: mesh))
@@ -824,25 +865,115 @@ struct ExportSheet: View {
     }
 }
 
-struct QuickLookPreview: UIViewControllerRepresentable {
-    let url: URL
+enum ViewerBackdrop: String, CaseIterable, Identifiable {
+    case dark
+    case light
+    case custom
 
-    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
+    var id: String { rawValue }
 
-    func makeUIViewController(context: Context) -> QLPreviewController {
-        let controller = QLPreviewController()
-        controller.dataSource = context.coordinator
-        return controller
+    var title: String {
+        switch self {
+        case .dark: return L10n.backdropDark
+        case .light: return L10n.backdropLight
+        case .custom: return L10n.backdropCustom
+        }
     }
 
-    func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {}
-
-    final class Coordinator: NSObject, QLPreviewControllerDataSource {
-        let url: URL
-        init(url: URL) { self.url = url }
-        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
-        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
-            url as NSURL
+    func color(custom: UIColor) -> UIColor {
+        switch self {
+        case .dark: return UIColor(red: 0.09, green: 0.11, blue: 0.13, alpha: 1)
+        case .light: return UIColor(red: 0.93, green: 0.94, blue: 0.95, alpha: 1)
+        case .custom: return custom
         }
+    }
+}
+
+enum UncoloredTint: String, CaseIterable, Identifiable {
+    case clay
+    case white
+    case slate
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .clay: return L10n.tintClay
+        case .white: return L10n.tintWhite
+        case .slate: return L10n.tintSlate
+        case .custom: return L10n.backdropCustom
+        }
+    }
+
+    func color(custom: UIColor) -> UIColor {
+        switch self {
+        case .clay: return UIColor(red: 0.78, green: 0.64, blue: 0.50, alpha: 1)
+        case .white: return UIColor(red: 0.93, green: 0.93, blue: 0.91, alpha: 1)
+        case .slate: return UIColor(red: 0.45, green: 0.52, blue: 0.58, alpha: 1)
+        case .custom: return custom
+        }
+    }
+}
+
+struct ViewerAppearanceSheet: View {
+    @ObservedObject var model: ViewerModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var backdropPick: Color
+    @State private var tintPick: Color
+
+    init(model: ViewerModel) {
+        self.model = model
+        _backdropPick = State(initialValue: Color(uiColor: model.customBackdrop))
+        _tintPick = State(initialValue: Color(uiColor: model.customTint))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(L10n.viewerBackground) {
+                    Picker(L10n.viewerBackground, selection: $model.backdrop) {
+                        ForEach(ViewerBackdrop.allCases) { item in
+                            Text(item.title).tag(item)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    if model.backdrop == .custom {
+                        ColorPicker(L10n.backdropCustom, selection: $backdropPick, supportsOpacity: false)
+                    }
+                }
+                Section(L10n.viewerMeshColor) {
+                    Picker(L10n.viewerMeshColor, selection: $model.uncoloredTint) {
+                        ForEach(UncoloredTint.allCases) { item in
+                            Text(item.title).tag(item)
+                        }
+                    }
+                    if model.uncoloredTint == .custom {
+                        ColorPicker(L10n.viewerMeshColor, selection: $tintPick, supportsOpacity: false)
+                    }
+                    Text(L10n.viewerMeshColorHelp)
+                        .font(.caption)
+                        .foregroundStyle(AppColor.textSecondary)
+                }
+            }
+            .navigationTitle(L10n.viewerAppearance)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L10n.commonDone) { dismiss() }
+                }
+            }
+            .onChange(of: model.backdrop) { _, _ in model.rebuildAppearance() }
+            .onChange(of: model.uncoloredTint) { _, _ in model.rebuildAppearance() }
+            .onChange(of: backdropPick) { _, newValue in
+                model.customBackdrop = UIColor(newValue)
+                model.rebuildAppearance()
+            }
+            .onChange(of: tintPick) { _, newValue in
+                model.customTint = UIColor(newValue)
+                model.rebuildAppearance()
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }

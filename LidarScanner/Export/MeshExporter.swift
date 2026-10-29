@@ -35,6 +35,87 @@ enum MeshExporter {
         return data
     }
 
+    static func dxfData(mesh: ScanMesh, millimeters: Bool, zUp: Bool) -> Data {
+        var data = Data()
+        data.reserveCapacity(mesh.triangleCount * 180 + 256)
+        func line(_ value: String) {
+            data.append(contentsOf: value.utf8)
+            data.append(contentsOf: [0x0D, 0x0A])
+        }
+        func vertex(_ codeX: String, _ codeY: String, _ codeZ: String, _ point: SIMD3<Float>) {
+            line(codeX)
+            line(String(format: "%.5f", point.x))
+            line(codeY)
+            line(String(format: "%.5f", point.y))
+            line(codeZ)
+            line(String(format: "%.5f", point.z))
+        }
+        line("0")
+        line("SECTION")
+        line("2")
+        line("HEADER")
+        line("9")
+        line("$ACADVER")
+        line("1")
+        line("AC1009")
+        line("9")
+        line("$INSUNITS")
+        line("70")
+        line(millimeters ? "4" : "6")
+        line("9")
+        line("$MEASUREMENT")
+        line("70")
+        line("1")
+        line("0")
+        line("ENDSEC")
+        line("0")
+        line("SECTION")
+        line("2")
+        line("TABLES")
+        line("0")
+        line("TABLE")
+        line("2")
+        line("LAYER")
+        line("70")
+        line("1")
+        line("0")
+        line("LAYER")
+        line("2")
+        line("MESH")
+        line("70")
+        line("0")
+        line("62")
+        line("7")
+        line("6")
+        line("CONTINUOUS")
+        line("0")
+        line("ENDTAB")
+        line("0")
+        line("ENDSEC")
+        line("0")
+        line("SECTION")
+        line("2")
+        line("ENTITIES")
+        for triangle in 0..<mesh.triangleCount {
+            let a = oriented(mesh.positions[Int(mesh.indices[triangle * 3])], scale: millimeters ? 1000 : 1, zUp: zUp)
+            let b = oriented(mesh.positions[Int(mesh.indices[triangle * 3 + 1])], scale: millimeters ? 1000 : 1, zUp: zUp)
+            let c = oriented(mesh.positions[Int(mesh.indices[triangle * 3 + 2])], scale: millimeters ? 1000 : 1, zUp: zUp)
+            line("0")
+            line("3DFACE")
+            line("8")
+            line("MESH")
+            vertex("10", "20", "30", a)
+            vertex("11", "21", "31", b)
+            vertex("12", "22", "32", c)
+            vertex("13", "23", "33", c)
+        }
+        line("0")
+        line("ENDSEC")
+        line("0")
+        line("EOF")
+        return data
+    }
+
     static func objPackage(mesh: ScanMesh, baseName: String) throws -> Data {
         let safe = FileNames.safe(baseName)
         if let baked = TextureBaker.bake(mesh), let png = baked.pngData() {
@@ -96,6 +177,7 @@ enum MeshExporter {
         var files: [(String, Data)] = []
         files.append(("\(safe).ply", plyData(mesh: mesh)))
         files.append(("\(safe).stl", stlData(mesh: mesh, millimeters: true, zUp: true)))
+        files.append(("\(safe).dxf", dxfData(mesh: mesh, millimeters: true, zUp: true)))
         files.append(("\(safe).glb", try glbData(mesh: mesh)))
         if let baked = TextureBaker.bake(mesh), let png = baked.pngData() {
             let obj = objText(positions: baked.positions, normals: baked.normals, uvs: baked.uvs, colors: nil, indices: baked.indices, material: "\(safe).mtl")
