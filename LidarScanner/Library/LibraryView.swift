@@ -23,6 +23,11 @@ struct RootView: View {
         .sheet(isPresented: $showModes) { modeSheet }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showTips) { TipsView() }
+        .alert(L10n.appName, isPresented: colorNoticePresented) {
+            Button(L10n.commonOK, role: .cancel) { library.colorNotice = nil }
+        } message: {
+            Text(library.colorNotice ?? "")
+        }
         .fullScreenCover(item: $route) { route in
             ScanRouter(route: route) { id in
                 selection = id
@@ -53,12 +58,22 @@ struct RootView: View {
                 .listRowBackground(Color.clear)
             }
             ForEach(filtered) { record in
-                ScanRow(record: record, thumbnail: library.thumbnails[record.id])
+                ScanRow(
+                    record: record,
+                    thumbnail: library.thumbnails[record.id],
+                    colorProgress: library.colorJob?.scanID == record.id ? library.colorJob?.progress : nil
+                )
                     .tag(record.id)
                     .listRowBackground(AppColor.surface)
                     .swipeActions {
                         Button(role: .destructive) { delete(record) } label: {
                             Label(L10n.libraryDelete, systemImage: "trash")
+                        }
+                        if record.canAddColor {
+                            Button { library.startAddingColor(to: record.id) } label: {
+                                Label(L10n.colorAdd, systemImage: "paintbrush")
+                            }
+                            .tint(AppColor.accent)
                         }
                         Button {
                             renameText = record.name
@@ -72,6 +87,11 @@ struct RootView: View {
                         Button(L10n.libraryRename, systemImage: "pencil") {
                             renameText = record.name
                             renameTarget = record
+                        }
+                        if record.canAddColor {
+                            Button(L10n.colorAdd, systemImage: "paintbrush") {
+                                library.startAddingColor(to: record.id)
+                            }
                         }
                         Button(L10n.libraryDelete, systemImage: "trash", role: .destructive) { delete(record) }
                     }
@@ -119,6 +139,10 @@ struct RootView: View {
 
     private var deletePresented: Binding<Bool> {
         Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })
+    }
+
+    private var colorNoticePresented: Binding<Bool> {
+        Binding(get: { library.colorNotice != nil }, set: { if !$0 { library.colorNotice = nil } })
     }
 
     @ToolbarContentBuilder
@@ -217,8 +241,10 @@ struct RootView: View {
 }
 
 struct ScanRow: View {
+    @EnvironmentObject private var library: ScanLibrary
     let record: ScanRecord
     let thumbnail: UIImage?
+    var colorProgress: Double?
 
     var body: some View {
         HStack(spacing: 14) {
@@ -231,10 +257,22 @@ struct ScanRow: View {
                 Text(record.createdAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.subheadline)
                     .foregroundStyle(AppColor.textSecondary)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(record.status == .needsReconstruction ? AppColor.warning : AppColor.textSecondary)
-                    .lineLimit(2)
+                if let colorProgress {
+                    ProgressView(value: colorProgress)
+                        .tint(AppColor.accent)
+                    HStack {
+                        Text(L10n.colorWorking)
+                        Spacer()
+                        Button(L10n.colorCancel) { library.cancelAddingColor() }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppColor.accent)
+                } else {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(record.status == .needsReconstruction ? AppColor.warning : AppColor.textSecondary)
+                        .lineLimit(2)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -244,6 +282,7 @@ struct ScanRow: View {
 
     private var subtitle: String {
         if record.status == .needsReconstruction { return L10n.libraryNeedsReconstruction }
+        if record.canAddColor { return "\(record.mode.title) · \(L10n.colorReady)" }
         return "\(record.mode.title) · \(L10n.triangles(record.triangleCount))"
     }
 

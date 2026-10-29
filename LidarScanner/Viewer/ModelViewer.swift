@@ -268,6 +268,7 @@ struct ModelViewer: View {
                     .padding(12)
                 }
             }
+            colorBar
             bottomBar
         }
         .background(AppColor.background)
@@ -278,6 +279,11 @@ struct ModelViewer: View {
         .onChange(of: model.shaded) { _, _ in model.rebuildAppearance() }
         .onChange(of: model.showClasses) { _, _ in model.rebuildAppearance() }
         .onChange(of: model.wireframe) { _, _ in model.rebuildAppearance() }
+        .onChange(of: library.record(scanID)?.isColored) { _, colored in
+            if colored == true {
+                Task { await load() }
+            }
+        }
         .onAppear {
             model.measurements = library.measurements(id: scanID)
             model.onMeasurementsChange = { measurements in
@@ -347,6 +353,38 @@ struct ModelViewer: View {
                 Image(systemName: "ellipsis.circle")
             }
             .accessibilityLabel(L10n.viewerView)
+        }
+    }
+
+    @ViewBuilder
+    private var colorBar: some View {
+        if let job = library.colorJob, job.scanID == scanID {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(job.message).font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text("\(Int((job.progress * 100).rounded()))%")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(AppColor.textSecondary)
+                }
+                ProgressView(value: job.progress).tint(AppColor.accent)
+                Button(L10n.colorCancel) { library.cancelAddingColor() }
+                    .font(.subheadline.weight(.semibold))
+            }
+            .padding(12)
+            .background(AppColor.surface)
+        } else if record?.canAddColor == true {
+            Button {
+                library.startAddingColor(to: scanID)
+            } label: {
+                Label(L10n.colorAdd, systemImage: "paintbrush")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(AppColor.onAccent)
+            .background(AppColor.accent)
         }
     }
 

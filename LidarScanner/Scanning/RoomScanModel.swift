@@ -47,6 +47,7 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
     @Published var savedID: UUID?
 
     private var objectCenter: SIMD3<Float>?
+    private var finishSignal: WorkSignal?
 
     init(mode: ScanMode, library: ScanLibrary) {
         self.mode = mode
@@ -145,46 +146,114 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
             setCenterFromCrosshair()
         }
         isProcessing = true
-        processingText = L10n.scanProcessingMesh
-        colorProgress = 0
+        processingText = L10n.scanSavingGeometry
+        colorProgress = 0.04
+        let signal = WorkSignal()
+        finishSignal = signal
         keyframes.setAccepting(false)
-        let extracted = extractMesh()
-        let frames = keyframes.snapshot()
         let mode = self.mode
-        sceneView.session.pause()
-        isPaused = true
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            var mesh = extracted
-            DispatchQueue.main.async { self?.processingText = L10n.scanProcessingColor }
-            MeshColorizer.colorize(&mesh, keyframes: frames) { progress in
-                DispatchQueue.main.async { self?.colorProgress = progress }
-            }
-            let cell: Float = mode == .room ? 0.004 : 0.002
-            mesh = mesh.welded(cellSize: cell)
-            mesh.recomputeNormals()
-            guard mesh.triangleCount >= 30 else {
-                DispatchQueue.main.async {
-                    self?.isProcessing = false
-                    self?.alertMessage = L10n.scanNotEnoughBody
-                    self?.resume()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let name = self.library.defaultName(for: mode)
+            let root = self.library.root
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard !signal.isCancelled else {
+                    self.finishCancelled()
+                    return
                 }
-                return
+                let started = CFAbsoluteTimeGetCurrent()
+                let extracted = self.extractMesh()
+                let frames = self.keyframes.snapshot()
+                self.sceneView.session.pause()
+                self.isPaused = true
+                self.colorProgress = 0.2
+                Log.scan.info("extract vertices=\(extracted.positions.count, privacy: .public) triangles=\(extracted.triangleCount, privacy: .public) frames=\(frames.count, privacy: .public) ms=\(ScanTiming.milliseconds(since: started), privacy: .public)")
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    self?.saveGeometry(extracted, frames: frames, mode: mode, name: name, root: root, signal: signal, started: started)
+                }
             }
-            let ply = MeshIO.encode(mesh)
-            let baked = TextureBaker.bake(mesh)
+        }
+    }
+
+    func cancelFinish() {
+        finishSignal?.cancel()
+    }
+
+    private func finishCancelled() {
+        isProcessing = false
+        colorProgress = 0
+        finishSignal = nil
+        if isPaused {
+            resume()
+        }
+    }
+
+    private func saveGeometry(
+        _ extracted: ScanMesh,
+        frames: [ColorKeyframe],
+        mode: ScanMode,
+        name: String,
+        root: URL,
+        signal: WorkSignal,
+        started: CFAbsoluteTime
+    ) {
+        if signal.isCancelled {
+            DispatchQueue.main.async { [weak self] in self?.finishCancelled() }
+            return
+        }
+        let weldStarted = CFAbsoluteTimeGetCurrent()
+        let cell: Float = mode == .room ? 0.004 : 0.002
+        var mesh = extracted.welded(cellSize: cell)
+        mesh.recomputeNormals()
+        Log.scan.info("weld vertices=\(mesh.positions.count, privacy: .public) triangles=\(mesh.triangleCount, privacy: .public) ms=\(ScanTiming.milliseconds(since: weldStarted), privacy: .public)")
+        guard mesh.triangleCount >= 30 else {
+            DispatchQueue.main.async { [weak self] in
+                self?.isProcessing = false
+                self?.finishSignal = nil
+                self?.alertMessage = L10n.scanNotEnoughBody
+                self?.resume()
+            }
+            return
+        }
+        if signal.isCancelled {
+            DispatchQueue.main.async { [weak self] in self?.finishCancelled() }
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.colorProgress = 0.55
+            self?.processingText = L10n.scanProcessingSave
+        }
+        do {
+            let saved = try GeometryArchive.save(mesh: mesh, frames: frames, mode: mode, name: name, root: root)
+            Log.scan.info("finish total ms=\(ScanTiming.milliseconds(since: started), privacy: .public)")
+            let previewURL = ScanPaths(directory: root.appendingPathComponent(saved.record.id.uuidString, isDirectory: true)).preview
+            DispatchQueue.global(qos: .utility).async {
+                let previewStarted = CFAbsoluteTimeGetCurrent()
+                try? MeshExporter.usdz(mesh: mesh, baked: nil, to: previewURL, allowBake: false)
+                Log.scan.info("preview usdz ms=\(ScanTiming.milliseconds(since: previewStarted), privacy: .public)")
+            }
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.processingText = L10n.scanProcessingSave
-                do {
-                    let record = try self.library.saveLiDAR(mesh: mesh, ply: ply, baked: baked, mode: mode)
-                    Haptics.success()
-                    self.savedID = record.id
-                } catch {
-                    self.isProcessing = false
-                    self.alertMessage = error.localizedDescription
-                    Log.scan.error("Save failed: \(error.localizedDescription, privacy: .public)")
+                guard !signal.isCancelled else {
+                    try? FileManager.default.removeItem(at: root.appendingPathComponent(saved.record.id.uuidString, isDirectory: true))
+                    self.finishCancelled()
+                    return
                 }
+                self.library.adopt(record: saved.record, thumbnail: saved.thumbnail)
+                self.colorProgress = 1
+                self.finishSignal = nil
+                self.isProcessing = false
+                Haptics.success()
+                self.savedID = saved.record.id
+            }
+        } catch {
+            Log.scan.error("Save failed: \(error.localizedDescription, privacy: .public)")
+            DispatchQueue.main.async { [weak self] in
+                self?.isProcessing = false
+                self?.finishSignal = nil
+                self?.alertMessage = error.localizedDescription
+                if self?.isPaused == true { self?.resume() }
             }
         }
     }

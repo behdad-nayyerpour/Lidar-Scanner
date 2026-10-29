@@ -61,6 +61,16 @@
 "scan.processing.mesh" = "Building the mesh";
 "scan.processing.color" = "Adding color from the camera";
 "scan.processing.save" = "Saving the scan";
+"scan.processing.geometry" = "Saving the mesh";
+"color.add" = "Add color";
+"color.working" = "Adding color";
+"color.cancel" = "Cancel color";
+"color.cancelled" = "Coloring cancelled. The mesh is unchanged.";
+"color.failed" = "Color could not be added. The mesh is unchanged.";
+"color.partial" = "Coloring stopped early. The mesh includes the color finished so far.";
+"color.unavailable" = "No camera frames were saved for this scan.";
+"color.busy" = "Another scan is already being colored.";
+"color.ready" = "Ready to add color";
 "scan.guidance.ready" = "Press Start, then move slowly through the space.";
 "scan.guidance.paused" = "Paused";
 "scan.guidance.slow" = "Slow down so the mesh can keep up.";

@@ -38,7 +38,12 @@ struct BakedTexture: Sendable {
 enum TextureBaker {
     /// Packs each triangle into its own atlas cell and bakes vertex colors into that cell.
     /// UVs use the SceneKit / OBJ convention: V = 0 at the bottom of the image.
-    static func bake(_ mesh: ScanMesh) -> BakedTexture? {
+    static func bake(
+        _ mesh: ScanMesh,
+        shouldStop: (@Sendable () -> Bool)? = nil,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) -> BakedTexture? {
+        let started = CFAbsoluteTimeGetCurrent()
         let faceCount = mesh.triangleCount
         guard faceCount > 0, let layout = layout(for: faceCount) else { return nil }
 
@@ -74,9 +79,12 @@ enum TextureBaker {
             let c0 = color(mesh, i0)
             let c1 = color(mesh, i1)
             let c2 = color(mesh, i2)
+            fillTile(originX: originX, originY: originY, step: step, color: (c0 + c1 + c2) / 3, size: size, rgba: &rgba)
             rasterize(p0, c0, p1, c1, p2, c2, tileX: originX, tileY: originY, tileSize: step, size: size, rgba: &rgba)
-            seed(SIMD2(Float(originX + cell / 2), Float(originY + cell / 2)), color: (c0 + c1 + c2) / 3, size: size, rgba: &rgba)
-            dilate(tileX: originX, tileY: originY, tileSize: step, size: size, rgba: &rgba)
+            if triangle & 2047 == 0 {
+                if shouldStop?() == true { return nil }
+                progress?(Double(triangle) / Double(faceCount))
+            }
 
             let base = UInt32(positions.count)
             let corners = [i0, i1, i2]
@@ -92,6 +100,7 @@ enum TextureBaker {
         }
 
         guard !indices.isEmpty else { return nil }
+        Log.scan.info("textureBake faces=\(faceCount, privacy: .public) size=\(size, privacy: .public) ms=\(ScanTiming.milliseconds(since: started), privacy: .public)")
         return BakedTexture(positions: positions, normals: normals, uvs: uvs, indices: indices, rgba: rgba, size: size)
     }
 
@@ -147,35 +156,14 @@ enum TextureBaker {
         (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)
     }
 
-    private static func seed(_ pixel: SIMD2<Float>, color: SIMD3<Float>, size: Int, rgba: inout [UInt8]) {
-        let x = min(size - 1, max(0, Int(pixel.x)))
-        let y = min(size - 1, max(0, Int(pixel.y)))
-        write(x, y, color, size: size, rgba: &rgba)
-    }
-
-    private static func dilate(tileX: Int, tileY: Int, tileSize: Int, size: Int, rgba: inout [UInt8]) {
-        let maxX = min(size - 1, tileX + tileSize - 1)
-        let maxY = min(size - 1, tileY + tileSize - 1)
-        for _ in 0..<2 {
-            var copy = rgba
-            for y in tileY...maxY {
-                for x in tileX...maxX {
-                    let index = (y * size + x) * 4
-                    guard rgba[index + 3] == 0 else { continue }
-                    let neighbors = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
-                    for (nx, ny) in neighbors where nx >= tileX && ny >= tileY && nx <= maxX && ny <= maxY {
-                        let source = (ny * size + nx) * 4
-                        if rgba[source + 3] != 0 {
-                            copy[index] = rgba[source]
-                            copy[index + 1] = rgba[source + 1]
-                            copy[index + 2] = rgba[source + 2]
-                            copy[index + 3] = 255
-                            break
-                        }
-                    }
-                }
+    private static func fillTile(originX: Int, originY: Int, step: Int, color: SIMD3<Float>, size: Int, rgba: inout [UInt8]) {
+        let maxX = min(size, originX + step)
+        let maxY = min(size, originY + step)
+        guard originX < maxX, originY < maxY else { return }
+        for y in originY..<maxY {
+            for x in originX..<maxX {
+                write(x, y, color, size: size, rgba: &rgba)
             }
-            rgba = copy
         }
     }
 

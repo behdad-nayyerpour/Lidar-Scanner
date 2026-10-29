@@ -71,6 +71,16 @@ enum L10n {
     static var scanProcessingMesh: String { tr("scan.processing.mesh", "Building the mesh") }
     static var scanProcessingColor: String { tr("scan.processing.color", "Adding color from the camera") }
     static var scanProcessingSave: String { tr("scan.processing.save", "Saving the scan") }
+    static var scanSavingGeometry: String { tr("scan.processing.geometry", "Saving the mesh") }
+    static var colorAdd: String { tr("color.add", "Add color") }
+    static var colorWorking: String { tr("color.working", "Adding color") }
+    static var colorCancel: String { tr("color.cancel", "Cancel color") }
+    static var colorCancelled: String { tr("color.cancelled", "Coloring cancelled. The mesh is unchanged.") }
+    static var colorFailed: String { tr("color.failed", "Color could not be added. The mesh is unchanged.") }
+    static var colorPartial: String { tr("color.partial", "Coloring stopped early. The mesh includes the color finished so far.") }
+    static var colorUnavailable: String { tr("color.unavailable", "No camera frames were saved for this scan.") }
+    static var colorBusy: String { tr("color.busy", "Another scan is already being colored.") }
+    static var colorReady: String { tr("color.ready", "Ready to add color") }
     static var scanGuidanceReady: String { tr("scan.guidance.ready", "Press Start, then move slowly through the space.") }
     static var scanGuidancePaused: String { tr("scan.guidance.paused", "Paused") }
     static var scanGuidanceSlow: String { tr("scan.guidance.slow", "Slow down so the mesh can keep up.") }

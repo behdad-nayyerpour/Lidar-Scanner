@@ -214,10 +214,12 @@ struct RoomScanScreen: View {
                 .tint(AppColor.accent)
             Text(model.processingText)
                 .font(.headline)
-            Text(L10n.photoKeepOpen)
-                .font(.subheadline)
-                .multilineTextAlignment(.center)
+            Text("\(Int((model.colorProgress * 100).rounded()))%")
+                .font(.subheadline.monospacedDigit())
                 .foregroundStyle(AppColor.textSecondary)
+            Button(L10n.scanCancel) { model.cancelFinish() }
+                .font(.headline)
+                .foregroundStyle(.white)
         }
         .padding(24)
         .frame(maxWidth: 360)

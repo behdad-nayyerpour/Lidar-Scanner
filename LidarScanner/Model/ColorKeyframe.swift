@@ -9,7 +9,7 @@ struct ColorKeyframe: Sendable {
     var intrinsics: simd_float3x3
     var cameraPosition: SIMD3<Float>
 
-    static func make(from frame: ARFrame, maxDimension: Int = 512) -> ColorKeyframe? {
+    static func make(from frame: ARFrame, maxDimension: Int = 256) -> ColorKeyframe? {
         guard let image = PixelSampler.rgbaImage(from: frame.capturedImage, maxDimension: maxDimension) else {
             return nil
         }
@@ -58,6 +58,21 @@ struct ColorKeyframe: Sendable {
         return (score, bilinear(u, v))
     }
 
+    /// Visibility of a point from this camera, without a surface normal. Used to pick a few candidate frames per region.
+    func coverageScore(world: SIMD3<Float>) -> Float? {
+        let cameraSpace = viewMatrix * SIMD4<Float>(world.x, world.y, world.z, 1)
+        guard cameraSpace.z < -0.05 else { return nil }
+        let inverseDepth = -1 / cameraSpace.z
+        let x = cameraSpace.x * inverseDepth
+        let y = cameraSpace.y * inverseDepth
+        let u = intrinsics.columns.0.x * x + intrinsics.columns.2.x
+        let v = intrinsics.columns.1.y * y + intrinsics.columns.2.y
+        guard u >= 1, v >= 1, u < Float(width) - 1, v < Float(height) - 1 else { return nil }
+        let distance = simd_distance(cameraPosition, world)
+        guard distance > 0.05, distance < 8 else { return nil }
+        return 1 / (0.35 + distance)
+    }
+
     private func bilinear(_ u: Float, _ v: Float) -> SIMD3<Float> {
         let x0 = Int(floor(u))
         let y0 = Int(floor(v))
@@ -93,7 +108,7 @@ final class KeyframeBuffer: @unchecked Sendable {
     private var accepting = false
     private let limit: Int
 
-    init(limit: Int = 32) {
+    init(limit: Int = 16) {
         self.limit = limit
     }
 

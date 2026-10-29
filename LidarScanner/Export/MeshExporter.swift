@@ -79,8 +79,8 @@ enum MeshExporter {
         )
     }
 
-    static func usdz(mesh: ScanMesh, baked: BakedTexture? = nil, to url: URL) throws {
-        let texture = baked ?? TextureBaker.bake(mesh)
+    static func usdz(mesh: ScanMesh, baked: BakedTexture? = nil, to url: URL, allowBake: Bool = true) throws {
+        let texture = baked ?? (allowBake ? TextureBaker.bake(mesh) : nil)
         if let texture, let geometry = texture.makeTexturedGeometry() {
             let scene = SCNScene()
             scene.rootNode.addChildNode(SCNNode(geometry: geometry))
