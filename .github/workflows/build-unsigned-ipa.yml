@@ -1,0 +1,49 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unsigned-ipa-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Unsigned iOS IPA
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select latest Xcode
+        run: |
+          set -euo pipefail
+          echo "Xcode installs:"
+          ls -d /Applications/Xcode*.app
+          latest="$(python3 scripts/select-latest-xcode.py)"
+          echo "Selecting ${latest}"
+          sudo xcode-select -s "${latest}"
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Install XcodeGen
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+
+      - name: Generate project, build, and package unsigned IPA
+        run: bash scripts/build-unsigned-ipa.sh
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LidarScanner-unsigned-ipa
+          path: dist/LidarScanner-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

@@ -1,0 +1,810 @@
+import QuickLook
+import SceneKit
+import simd
+import SwiftUI
+import UIKit
+
+struct MeasureLabel: Identifiable {
+    let id: UUID
+    let point: CGPoint
+    let text: String
+}
+
+final class ViewerModel: NSObject, ObservableObject, SCNSceneRendererDelegate {
+    let sceneView = SCNView()
+    @Published var isLoading = true
+    @Published var errorText: String?
+    @Published var measuring = false
+    @Published var shaded = false
+    @Published var showClasses = false
+    @Published var wireframe = false
+    @Published var labels: [MeasureLabel] = []
+    @Published var measurements: [StoredMeasurement] = []
+    @Published var triangleCount = 0
+    @Published var vertexCount = 0
+    @Published var area: Float = 0
+    @Published var boundsSize = SIMD3<Float>.zero
+    @Published var canProcess = false
+    @Published var presentClasses: [UInt8] = []
+
+    private var mesh: ScanMesh?
+    private var usingUSDZ = false
+    private var draft: SIMD3<Float>?
+    private var lastLabelUpdate: TimeInterval = 0
+    var onMeasurementsChange: (([StoredMeasurement]) -> Void)?
+
+    func show(mesh: ScanMesh) {
+        self.mesh = mesh
+        usingUSDZ = false
+        triangleCount = mesh.triangleCount
+        vertexCount = mesh.positions.count
+        area = mesh.surfaceArea()
+        boundsSize = mesh.boundingBox().size
+        presentClasses = Array(mesh.classRawValues()).sorted()
+        canProcess = true
+        install(scene: scene(for: mesh))
+    }
+
+    func showUSDZ(_ url: URL) {
+        guard let scene = try? SCNScene(url: url, options: nil) else {
+            errorText = L10n.viewerProcessUnavailable
+            isLoading = false
+            return
+        }
+        usingUSDZ = true
+        mesh = nil
+        canProcess = false
+        showClasses = false
+        let box = SceneFraming.bounds(of: scene)
+        boundsSize = box.size
+        install(scene: scene)
+    }
+
+    func rebuildAppearance() {
+        guard let mesh, !usingUSDZ else { return }
+        install(scene: scene(for: mesh))
+    }
+
+    func resetCamera() {
+        guard let camera = sceneView.pointOfView else { return }
+        SceneFraming.frame(camera, in: sceneView.scene)
+    }
+
+    func clearMeasurements() {
+        measurements = []
+        draft = nil
+        onMeasurementsChange?([])
+        rebuildOverlays()
+    }
+
+    @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+        guard measuring, gesture.state == .ended else { return }
+        let point = gesture.location(in: sceneView)
+        let hits = sceneView.hitTest(point, options: [
+            SCNHitTestOption.searchMode: SCNHitTestSearchMode.closest.rawValue,
+            SCNHitTestOption.ignoreHiddenNodes: true
+        ])
+        guard let hit = hits.first(where: { acceptable($0.node) }) else { return }
+        let world = SIMD3<Float>(hit.simdWorldCoordinates)
+        if let start = draft {
+            let measurement = StoredMeasurement(start: start, end: world)
+            measurements.append(measurement)
+            draft = nil
+            onMeasurementsChange?(measurements)
+            Haptics.tap()
+        } else {
+            draft = world
+            Haptics.tap()
+        }
+        rebuildOverlays()
+    }
+
+    func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+        guard measuring else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastLabelUpdate > 0.05 else { return }
+        lastLabelUpdate = now
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshLabels()
+        }
+    }
+
+    private func scene(for mesh: ScanMesh) -> SCNScene {
+        let scene = SCNScene()
+        let mode: ViewerColorMode = showClasses ? .classification : .vertex
+        let node = SCNNode(geometry: mesh.makeGeometry(mode: mode, lit: shaded && !showClasses, wireframe: wireframe))
+        node.name = "scanMesh"
+        scene.rootNode.addChildNode(node)
+        return scene
+    }
+
+    private func install(scene: SCNScene) {
+        SceneFraming.prepare(scene, background: .clear)
+        sceneView.scene = scene
+        sceneView.pointOfView = scene.rootNode.childNode(withName: "camera", recursively: true)
+        sceneView.allowsCameraControl = true
+        sceneView.rendersContinuously = true
+        isLoading = false
+        errorText = nil
+        rebuildOverlays()
+    }
+
+    private func acceptable(_ node: SCNNode) -> Bool {
+        var current: SCNNode? = node
+        while let item = current {
+            if item.name == "marker" || item.name == "measureLine" || item.name == "light" || item.name == "camera" {
+                return false
+            }
+            current = item.parent
+        }
+        return true
+    }
+
+    private func rebuildOverlays() {
+        sceneView.scene?.rootNode.childNodes
+            .filter { $0.name == "marker" || $0.name == "measureLine" }
+            .forEach { $0.removeFromParentNode() }
+        let scale = max(boundsSize.x, max(boundsSize.y, boundsSize.z))
+        let radius = max(0.004, scale * 0.008)
+        for measurement in measurements {
+            guard let start = measurement.start, let end = measurement.end else { continue }
+            addMarker(at: start, radius: radius)
+            addMarker(at: end, radius: radius)
+            addLine(from: start, to: end, radius: radius * 0.28)
+        }
+        if let draft {
+            addMarker(at: draft, radius: radius)
+        }
+        refreshLabels()
+    }
+
+    private func addMarker(at position: SIMD3<Float>, radius: Float) {
+        let sphere = SCNSphere(radius: CGFloat(radius))
+        sphere.segmentCount = 12
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor(red: 0.15, green: 0.85, blue: 0.75, alpha: 1)
+        sphere.materials = [material]
+        let node = SCNNode(geometry: sphere)
+        node.simdPosition = position
+        node.name = "marker"
+        sceneView.scene?.rootNode.addChildNode(node)
+    }
+
+    private func addLine(from start: SIMD3<Float>, to end: SIMD3<Float>, radius: Float) {
+        let delta = end - start
+        let length = simd_length(delta)
+        guard length > 0.0001 else { return }
+        let cylinder = SCNCylinder(radius: CGFloat(radius), height: CGFloat(length))
+        cylinder.radialSegmentCount = 8
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor.white
+        cylinder.materials = [material]
+        let node = SCNNode(geometry: cylinder)
+        node.name = "measureLine"
+        node.simdPosition = (start + end) * 0.5
+        let direction = delta / length
+        let up = SIMD3<Float>(0, 1, 0)
+        if simd_length(simd_cross(up, direction)) < 0.001 {
+            node.simdOrientation = simd_quatf(angle: direction.y >= 0 ? 0 : .pi, axis: SIMD3(1, 0, 0))
+        } else {
+            node.simdOrientation = simd_quatf(from: up, to: direction)
+        }
+        sceneView.scene?.rootNode.addChildNode(node)
+    }
+
+    private func refreshLabels() {
+        let raw = UserDefaults.standard.string(forKey: "measurementUnit") ?? MeasurementUnit.meters.rawValue
+        let unit = MeasurementUnit(rawValue: raw) ?? .meters
+        var next: [MeasureLabel] = []
+        for measurement in measurements {
+            guard let start = measurement.start, let end = measurement.end else { continue }
+            let mid = (start + end) * 0.5
+            let projected = sceneView.projectPoint(SCNVector3(mid))
+            guard projected.z > 0, projected.z < 1 else { continue }
+            let point = CGPoint(x: CGFloat(projected.x), y: CGFloat(projected.y))
+            guard sceneView.bounds.contains(point) else { continue }
+            next.append(MeasureLabel(id: measurement.id, point: point, text: unit.formatDistance(simd_distance(start, end))))
+        }
+        labels = next
+    }
+}
+
+struct ModelViewer: View {
+    let scanID: UUID
+    @EnvironmentObject private var library: ScanLibrary
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var model = ViewerModel()
+    @State private var showProcess = false
+    @State private var showExport = false
+    @State private var showQuickLook = false
+    @State private var showStats = false
+    @State private var confirmRevert = false
+    @State private var renameText = ""
+    @State private var renaming = false
+    @State private var alertText: String?
+
+    private var record: ScanRecord? { library.record(scanID) }
+    private var quickLookURL: URL? {
+        let paths = library.paths(for: scanID)
+        if paths.exists(paths.preview) { return paths.preview }
+        if paths.exists(paths.capture) { return paths.capture }
+        return nil
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                ModelSceneView(model: model, colorScheme: colorScheme)
+                ForEach(model.labels) { label in
+                    Text(label.text)
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .position(label.point)
+                }
+                .allowsHitTesting(false)
+                if model.isLoading {
+                    ProgressView(L10n.viewerLoading)
+                        .padding()
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                if model.showClasses {
+                    classLegend
+                }
+                if model.measuring {
+                    HStack(spacing: 8) {
+                        Text(L10n.viewerMeasureHelp)
+                        Button(L10n.viewerClear) { model.clearMeasurements() }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(12)
+                }
+            }
+            bottomBar
+        }
+        .background(AppColor.background)
+        .navigationTitle(record?.name ?? L10n.appName)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { toolbar }
+        .task { await load() }
+        .onChange(of: model.shaded) { _, _ in model.rebuildAppearance() }
+        .onChange(of: model.showClasses) { _, _ in model.rebuildAppearance() }
+        .onChange(of: model.wireframe) { _, _ in model.rebuildAppearance() }
+        .onAppear {
+            model.measurements = library.measurements(id: scanID)
+            model.onMeasurementsChange = { measurements in
+                try? library.saveMeasurements(id: scanID, measurements)
+            }
+        }
+        .sheet(isPresented: $showProcess) {
+            if let mesh = modelMesh {
+                ProcessingSheet(mesh: mesh) { updated in
+                    apply(updated)
+                }
+            }
+        }
+        .sheet(isPresented: $showExport) {
+            ExportSheet(scanID: scanID)
+        }
+        .sheet(isPresented: $showQuickLook) {
+            if let quickLookURL {
+                QuickLookPreview(url: quickLookURL)
+                    .ignoresSafeArea()
+            }
+        }
+        .sheet(isPresented: $showStats) { statsSheet }
+        .alert(L10n.libraryRename, isPresented: $renaming) {
+            TextField(L10n.libraryRenamePrompt, text: $renameText)
+            Button(L10n.librarySave) { try? library.rename(scanID, to: renameText) }
+            Button(L10n.libraryCancel, role: .cancel) {}
+        }
+        .confirmationDialog(L10n.viewerRevertTitle, isPresented: $confirmRevert, titleVisibility: .visible) {
+            Button(L10n.viewerRevert, role: .destructive) { revert() }
+            Button(L10n.libraryCancel, role: .cancel) {}
+        } message: {
+            Text(L10n.viewerRevertBody)
+        }
+        .alert(L10n.commonError, isPresented: alertPresented) {
+            Button(L10n.commonOK, role: .cancel) {}
+        } message: {
+            Text(alertText ?? "")
+        }
+    }
+
+    private var modelMesh: ScanMesh? { model.currentMesh }
+
+    private var alertPresented: Binding<Bool> {
+        Binding(get: { alertText != nil }, set: { if !$0 { alertText = nil } })
+    }
+
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Menu {
+                Button(L10n.libraryRename, systemImage: "pencil") {
+                    renameText = record?.name ?? ""
+                    renaming = true
+                }
+                Toggle(L10n.viewerLighting, isOn: $model.shaded)
+                Toggle(L10n.viewerClasses, isOn: $model.showClasses)
+                Toggle(L10n.viewerWire, isOn: $model.wireframe)
+                Button(L10n.viewerReset, systemImage: "viewfinder") { model.resetCamera() }
+                Button(L10n.viewerStats, systemImage: "info.circle") { showStats = true }
+                if library.paths(for: scanID).exists(library.paths(for: scanID).original) {
+                    Button(L10n.viewerRevert, systemImage: "arrow.uturn.backward", role: .destructive) {
+                        confirmRevert = true
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .accessibilityLabel(L10n.viewerView)
+        }
+    }
+
+    private var bottomBar: some View {
+        HStack(spacing: 8) {
+            barButton(L10n.viewerMeasure, "ruler", active: model.measuring) {
+                model.measuring.toggle()
+            }
+            barButton(L10n.viewerProcess, "slider.horizontal.3", active: false) {
+                if model.canProcess { showProcess = true }
+                else { alertText = L10n.viewerProcessUnavailable }
+            }
+            barButton(L10n.viewerQuickLook, "arkit", active: false) {
+                if quickLookURL != nil { showQuickLook = true }
+                else { alertText = L10n.viewerNoQuickLook }
+            }
+            barButton(L10n.viewerExport, "square.and.arrow.up", active: false) {
+                showExport = true
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(AppColor.surface)
+    }
+
+    private func barButton(_ title: String, _ symbol: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: symbol)
+                Text(title).font(.caption2.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .foregroundStyle(active ? AppColor.onAccent : AppColor.textPrimary)
+            .background(active ? AppColor.accent : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+
+    private var classLegend: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.presentClasses, id: \.self) { raw in
+                    HStack(spacing: 6) {
+                        Circle().fill(Color(SurfaceClass.uiColor(raw: raw))).frame(width: 8, height: 8)
+                        Text(SurfaceClass.title(raw: raw)).font(.caption2.weight(.semibold))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(.ultraThinMaterial, in: Capsule())
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private var statsSheet: some View {
+        NavigationStack {
+            List {
+                if let record {
+                    LabeledContent(L10n.modeRoomLabel, value: record.mode.title)
+                    LabeledContent(L10n.viewerStats, value: record.createdAt.formatted(date: .abbreviated, time: .shortened))
+                }
+                LabeledContent(L10n.statVertices, value: model.vertexCount.formatted())
+                LabeledContent(L10n.statTriangles, value: model.triangleCount.formatted())
+                LabeledContent(L10n.processResultSize, value: (MeasurementUnit(rawValue: UserDefaults.standard.string(forKey: "measurementUnit") ?? "") ?? .meters).formatSize(model.boundsSize))
+                LabeledContent(L10n.statArea, value: (MeasurementUnit(rawValue: UserDefaults.standard.string(forKey: "measurementUnit") ?? "") ?? .meters).formatArea(model.area))
+            }
+            .navigationTitle(L10n.viewerStats)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L10n.commonDone) { showStats = false }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func load() async {
+        let paths = library.paths(for: scanID)
+        let record = library.record(scanID)
+        let meshURL = paths.mesh
+        if record?.isProcessed == false, paths.exists(paths.capture) {
+            model.showUSDZ(paths.capture)
+            if paths.exists(meshURL), let mesh = try? MeshIO.read(from: meshURL) {
+                model.adoptCounts(from: mesh)
+            }
+            return
+        }
+        if paths.exists(meshURL) {
+            do {
+                let mesh = try await Task.detached(priority: .userInitiated) {
+                    try MeshIO.read(from: meshURL)
+                }.value
+                model.show(mesh: mesh)
+            } catch {
+                model.errorText = error.localizedDescription
+                model.isLoading = false
+            }
+        } else if paths.exists(paths.preview) {
+            model.showUSDZ(paths.preview)
+        } else {
+            model.errorText = L10n.viewerProcessUnavailable
+            model.isLoading = false
+        }
+    }
+
+    private func apply(_ mesh: ScanMesh) {
+        do {
+            try library.replaceMesh(id: scanID, mesh: mesh)
+            model.show(mesh: mesh)
+        } catch {
+            alertText = error.localizedDescription
+        }
+    }
+
+    private func revert() {
+        do {
+            try library.revert(id: scanID)
+            Task { await load() }
+        } catch {
+            alertText = error.localizedDescription
+        }
+    }
+}
+
+private struct ModelSceneView: UIViewRepresentable {
+    @ObservedObject var model: ViewerModel
+    var colorScheme: ColorScheme
+
+    func makeUIView(context: Context) -> SCNView {
+        let view = model.sceneView
+        view.antialiasingMode = .multisampling4X
+        view.allowsCameraControl = true
+        let tap = UITapGestureRecognizer(target: model, action: #selector(ViewerModel.handleTap(_:)))
+        tap.cancelsTouchesInView = false
+        view.addGestureRecognizer(tap)
+        view.delegate = model
+        return view
+    }
+
+    func updateUIView(_ uiView: SCNView, context: Context) {
+        uiView.backgroundColor = colorScheme == .dark
+            ? UIColor(red: 0.055, green: 0.078, blue: 0.094, alpha: 1)
+            : UIColor(red: 0.925, green: 0.933, blue: 0.941, alpha: 1)
+    }
+}
+
+extension ViewerModel {
+    var currentMesh: ScanMesh? { mesh }
+
+    func adoptCounts(from mesh: ScanMesh) {
+        triangleCount = mesh.triangleCount
+        vertexCount = mesh.positions.count
+        area = mesh.surfaceArea()
+        boundsSize = mesh.boundingBox().size
+        canProcess = true
+        self.mesh = mesh
+    }
+}
+
+struct ProcessingSheet: View {
+    let mesh: ScanMesh
+    var onApply: (ScanMesh) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var settings = ProcessingSettings()
+    @State private var working = false
+    @State private var errorText: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Button(L10n.processSuggested) {
+                        settings.smoothEnabled = true
+                        settings.smoothIterations = 2
+                        settings.removeFloaters = true
+                        settings.floaterFraction = 0.005
+                        settings.simplifyEnabled = false
+                    }
+                }
+                Section(L10n.processCrop) {
+                    Text(L10n.processCropHelp).font(.caption).foregroundStyle(AppColor.textSecondary)
+                    cropSlider(L10n.classOther, value: $settings.cropMinX, label: "X min")
+                    cropSlider("", value: $settings.cropMaxX, label: "X max")
+                    cropSlider("", value: $settings.cropMinY, label: "Y min")
+                    cropSlider("", value: $settings.cropMaxY, label: "Y max")
+                    cropSlider("", value: $settings.cropMinZ, label: "Z min")
+                    cropSlider("", value: $settings.cropMaxZ, label: "Z max")
+                    Text("\(L10n.processResultSize): \(previewSize)")
+                        .font(.subheadline)
+                }
+                Section {
+                    Toggle(L10n.processSmooth, isOn: $settings.smoothEnabled)
+                    Stepper(value: $settings.smoothIterations, in: 1...8) {
+                        Text("\(L10n.processIterations): \(settings.smoothIterations)")
+                    }
+                    .disabled(!settings.smoothEnabled)
+                }
+                Section {
+                    Toggle(L10n.processSimplify, isOn: $settings.simplifyEnabled)
+                    Text(L10n.processSimplifyHelp).font(.caption).foregroundStyle(AppColor.textSecondary)
+                    Slider(value: $settings.simplifyRatio, in: 0.1...1)
+                        .disabled(!settings.simplifyEnabled)
+                    Text(L10n.processKeep(Int((settings.simplifyRatio * 100).rounded())))
+                        .font(.subheadline)
+                }
+                Section {
+                    Toggle(L10n.processFloaters, isOn: $settings.removeFloaters)
+                    Text(L10n.processFloatersHelp).font(.caption).foregroundStyle(AppColor.textSecondary)
+                    Slider(value: $settings.floaterFraction, in: 0.001...0.05)
+                        .disabled(!settings.removeFloaters)
+                }
+                if let errorText {
+                    Text(errorText).foregroundStyle(AppColor.danger)
+                }
+            }
+            .navigationTitle(L10n.processTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L10n.libraryCancel) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L10n.processApply) { apply() }
+                        .disabled(working)
+                }
+            }
+            .overlay {
+                if working {
+                    ProgressView(L10n.processWorking)
+                        .padding()
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+            }
+        }
+    }
+
+    private var previewSize: String {
+        let box = mesh.boundingBox()
+        let size = box.size
+        let result = SIMD3(
+            size.x * (1 - settings.cropMinX - settings.cropMaxX),
+            size.y * (1 - settings.cropMinY - settings.cropMaxY),
+            size.z * (1 - settings.cropMinZ - settings.cropMaxZ)
+        )
+        let unit = MeasurementUnit(rawValue: UserDefaults.standard.string(forKey: "measurementUnit") ?? "") ?? .meters
+        return unit.formatSize(result)
+    }
+
+    private func cropSlider(_ unused: String, value: Binding<Float>, label: String) -> some View {
+        HStack {
+            Text(label).frame(width: 52, alignment: .leading).font(.caption)
+            Slider(value: value, in: 0...0.45)
+        }
+    }
+
+    private func apply() {
+        working = true
+        let source = mesh
+        let settings = settings
+        DispatchQueue.global(qos: .userInitiated).async {
+            let updated = source.processed(settings)
+            DispatchQueue.main.async {
+                working = false
+                if updated.isEmpty || updated.triangleCount < 4 {
+                    errorText = L10n.processEmpty
+                    return
+                }
+                onApply(updated)
+                dismiss()
+            }
+        }
+    }
+}
+
+struct ExportSheet: View {
+    let scanID: UUID
+    @EnvironmentObject private var library: ScanLibrary
+    @Environment(\.dismiss) private var dismiss
+    @State private var millimeters = true
+    @State private var zUp = true
+    @State private var working = false
+    @State private var share: SharePayload?
+    @State private var errorText: String?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section(L10n.exportSTLUnits) {
+                    Picker(L10n.exportSTLUnits, selection: $millimeters) {
+                        Text(L10n.exportMillimeters).tag(true)
+                        Text(L10n.exportMeters).tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    Toggle(L10n.exportZUp, isOn: $zUp)
+                }
+                exportRow(L10n.exportPLY, L10n.exportPLYDetail) { try await exportPLY() }
+                exportRow(L10n.exportOBJ, L10n.exportOBJDetail) { try await exportOBJ() }
+                exportRow(L10n.exportSTL, L10n.exportSTLDetail) { try await exportSTL() }
+                exportRow(L10n.exportUSDZ, L10n.exportUSDZDetail) { try await exportUSDZ() }
+                exportRow(L10n.exportGLB, L10n.exportGLBDetail) { try await exportGLB() }
+                if library.paths(for: scanID).exists(library.paths(for: scanID).capture) {
+                    exportRow(L10n.exportOriginalUSDZ, L10n.exportOriginalDetail) { try await exportOriginal() }
+                }
+                exportRow(L10n.exportAll, L10n.exportAllDetail) { try await exportAll() }
+                if let errorText {
+                    Text(errorText).foregroundStyle(AppColor.danger)
+                }
+            }
+            .navigationTitle(L10n.exportTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L10n.commonClose) { dismiss() }
+                }
+            }
+            .overlay {
+                if working {
+                    ProgressView(L10n.exportWorking)
+                        .padding()
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+            }
+            .sheet(item: $share) { payload in
+                ShareSheet(urls: payload.urls) {
+                    try? FileManager.default.removeItem(at: payload.cleanup)
+                }
+            }
+        }
+    }
+
+    private func exportRow(_ title: String, _ detail: String, action: @escaping () async throws -> Void) -> some View {
+        Button {
+            run(action)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline).foregroundStyle(AppColor.textPrimary)
+                Text(detail).font(.caption).foregroundStyle(AppColor.textSecondary)
+            }
+        }
+        .disabled(working)
+    }
+
+    private func run(_ action: @escaping () async throws -> Void) {
+        working = true
+        errorText = nil
+        Task {
+            do {
+                try await action()
+            } catch {
+                errorText = error.localizedDescription
+            }
+            working = false
+        }
+    }
+
+    private func loadMesh() async throws -> ScanMesh {
+        if let mesh = try library.loadMesh(id: scanID) { return mesh }
+        let paths = library.paths(for: scanID)
+        let source = paths.exists(paths.capture) ? paths.capture : paths.preview
+        guard paths.exists(source) else { throw ScanError.fileMissing }
+        return try USDZExtractor.extract(from: source)
+    }
+
+    private func stage(_ name: String, _ data: Data) throws -> SharePayload {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent(name)
+        try data.write(to: url, options: .atomic)
+        return SharePayload(urls: [url], cleanup: folder)
+    }
+
+    private func baseName() -> String {
+        FileNames.safe(library.record(scanID)?.name ?? "scan")
+    }
+
+    private func exportPLY() async throws {
+        let mesh = try await loadMesh()
+        share = try stage("\(baseName()).ply", MeshExporter.plyData(mesh: mesh))
+    }
+
+    private func exportOBJ() async throws {
+        let mesh = try await loadMesh()
+        share = try stage("\(baseName())-obj.zip", try MeshExporter.objPackage(mesh: mesh, baseName: baseName()))
+    }
+
+    private func exportSTL() async throws {
+        let mesh = try await loadMesh()
+        share = try stage("\(baseName()).stl", MeshExporter.stlData(mesh: mesh, millimeters: millimeters, zUp: zUp))
+    }
+
+    private func exportUSDZ() async throws {
+        let paths = library.paths(for: scanID)
+        if paths.exists(paths.preview) {
+            share = try shareCopy(of: paths.preview, name: "\(baseName()).usdz")
+            return
+        }
+        let mesh = try await loadMesh()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent("\(baseName()).usdz")
+        try MeshExporter.usdz(mesh: mesh, to: url)
+        share = SharePayload(urls: [url], cleanup: folder)
+    }
+
+    private func exportOriginal() async throws {
+        let url = library.paths(for: scanID).capture
+        guard library.paths(for: scanID).exists(url) else { throw ScanError.fileMissing }
+        share = try shareCopy(of: url, name: "\(baseName())-original.usdz")
+    }
+
+    private func shareCopy(of url: URL, name: String) throws -> SharePayload {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let copy = folder.appendingPathComponent(name)
+        try FileManager.default.copyItem(at: url, to: copy)
+        return SharePayload(urls: [copy], cleanup: folder)
+    }
+
+    private func exportGLB() async throws {
+        let mesh = try await loadMesh()
+        share = try stage("\(baseName()).glb", try MeshExporter.glbData(mesh: mesh))
+    }
+
+    private func exportAll() async throws {
+        let mesh = try await loadMesh()
+        let original = library.paths(for: scanID).capture
+        let data = try MeshExporter.allFormatsZip(
+            mesh: mesh,
+            baseName: baseName(),
+            includeOriginalUSDZ: library.paths(for: scanID).exists(original) ? original : nil
+        )
+        share = try stage("\(baseName())-all.zip", data)
+    }
+}
+
+struct QuickLookPreview: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
+
+    func makeUIViewController(context: Context) -> QLPreviewController {
+        let controller = QLPreviewController()
+        controller.dataSource = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {}
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource {
+        let url: URL
+        init(url: URL) { self.url = url }
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+            url as NSURL
+        }
+    }
+}
