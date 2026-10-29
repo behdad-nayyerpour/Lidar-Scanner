@@ -39,6 +39,17 @@ enum SurfaceClass {
         let color = color(raw: raw)
         return UIColor(red: CGFloat(color.x), green: CGFloat(color.y), blue: CGFloat(color.z), alpha: 1)
     }
+
+    /// A lightened class color so triangle edges stay readable over the fill and the camera.
+    static func wireUIColor(raw: UInt8) -> UIColor {
+        let color = color(raw: raw)
+        return UIColor(
+            red: CGFloat(min(1, color.x * 0.35 + 0.65)),
+            green: CGFloat(min(1, color.y * 0.35 + 0.65)),
+            blue: CGFloat(min(1, color.z * 0.35 + 0.65)),
+            alpha: 1
+        )
+    }
 }
 
 extension ScanMesh {

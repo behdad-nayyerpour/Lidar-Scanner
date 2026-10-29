@@ -119,8 +119,9 @@ struct RoomScanScreen: View {
             HStack(spacing: 8) {
                 HUDCapsule(text: unit.formatArea(model.surfaceArea), systemImage: "square.dashed")
                 HUDCapsule(text: compactCount(model.faceCount), systemImage: "triangle")
+                Spacer(minLength: 0)
+                overlayControl
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             Spacer()
             HUDCapsule(
                 text: model.guidance.message,
@@ -227,6 +228,26 @@ struct RoomScanScreen: View {
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(0.35))
+    }
+
+    private var overlayControl: some View {
+        HStack(spacing: 0) {
+            ForEach(ScanOverlayStyle.allCases) { style in
+                Button {
+                    model.setOverlayStyle(style)
+                } label: {
+                    Image(systemName: style.symbol)
+                        .font(.footnote.weight(.semibold))
+                        .frame(width: 34, height: 30)
+                        .foregroundStyle(.white)
+                        .background(model.overlayStyle == style ? Color.white.opacity(0.22) : Color.clear)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(style.title)
+            }
+        }
+        .background(.black.opacity(0.35), in: Capsule())
+        .accessibilityElement(children: .contain)
     }
 
     private func compactCount(_ value: Int) -> String {

@@ -5,6 +5,30 @@ import SceneKit
 import UIKit
 import simd
 
+enum ScanOverlayStyle: Int, CaseIterable, Identifiable {
+    case wireAndFill
+    case fill
+    case hidden
+
+    var id: Int { rawValue }
+
+    var symbol: String {
+        switch self {
+        case .wireAndFill: return "point.3.connected.trianglepath.dotted"
+        case .fill: return "square.fill"
+        case .hidden: return "eye.slash"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .wireAndFill: return L10n.overlayBoth
+        case .fill: return L10n.overlayFill
+        case .hidden: return L10n.overlayOff
+        }
+    }
+}
+
 struct ScanGuidance {
     enum Tone {
         case info
@@ -45,6 +69,7 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
     @Published var hasCenter = false
     @Published var alertMessage: String?
     @Published var savedID: UUID?
+    @Published var overlayStyle: ScanOverlayStyle
 
     private var objectCenter: SIMD3<Float>?
     private var finishSignal: WorkSignal?
@@ -52,6 +77,8 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
     init(mode: ScanMode, library: ScanLibrary) {
         self.mode = mode
         self.library = library
+        let stored = UserDefaults.standard.object(forKey: "scanOverlayStyle") as? Int
+        self.overlayStyle = ScanOverlayStyle(rawValue: stored ?? ScanOverlayStyle.wireAndFill.rawValue) ?? .wireAndFill
         super.init()
         sceneView.delegate = self
         sceneView.session.delegate = self
@@ -378,16 +405,27 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         }
     }
 
+    func setOverlayStyle(_ style: ScanOverlayStyle) {
+        overlayStyle = style
+        UserDefaults.standard.set(style.rawValue, forKey: "scanOverlayStyle")
+        sceneView.scene.rootNode.enumerateChildNodes { node, _ in
+            if node.name == "meshFill" {
+                node.isHidden = style == .hidden
+            } else if node.name == "meshWire" {
+                node.isHidden = style != .wireAndFill
+            }
+        }
+    }
+
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         guard let meshAnchor = anchor as? ARMeshAnchor else { return }
-        let meshNode = LiveMeshBuilder.node(for: meshAnchor)
-        node.addChildNode(meshNode)
+        node.addChildNode(LiveMeshBuilder.node(for: meshAnchor, style: overlayStyle))
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let meshAnchor = anchor as? ARMeshAnchor else { return }
         node.childNodes.filter { $0.name == "mesh" }.forEach { $0.removeFromParentNode() }
-        node.addChildNode(LiveMeshBuilder.node(for: meshAnchor))
+        node.addChildNode(LiveMeshBuilder.node(for: meshAnchor, style: overlayStyle))
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -522,7 +560,8 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
 }
 
 enum LiveMeshBuilder {
-    static func node(for anchor: ARMeshAnchor) -> SCNNode {
+    /// Fill plus wireframe share one triangle index buffer. Line mode draws the edges on the GPU, so the overlay does not build a second edge list.
+    static func node(for anchor: ARMeshAnchor, style: ScanOverlayStyle) -> SCNNode {
         let geometry = anchor.geometry
         let vertices = geometry.vertices
         let normals = geometry.normals
@@ -577,21 +616,52 @@ enum LiveMeshBuilder {
 
         let parent = SCNNode()
         parent.name = "mesh"
+        let sources = [vertexSource, normalSource]
         for (raw, faceIndices) in buckets where faceIndices.count >= 3 {
-            let element = SCNGeometryElement(
-                data: Packed.indexData(faceIndices),
+            let indexData = Packed.indexData(faceIndices)
+            let primitiveCount = faceIndices.count / 3
+            let fillElement = SCNGeometryElement(
+                data: indexData,
                 primitiveType: .triangles,
-                primitiveCount: faceIndices.count / 3,
+                primitiveCount: primitiveCount,
                 bytesPerIndex: MemoryLayout<UInt32>.size
             )
-            let meshGeometry = SCNGeometry(sources: [vertexSource, normalSource], elements: [element])
-            let material = SCNMaterial()
-            material.lightingModel = .constant
-            material.diffuse.contents = SurfaceClass.uiColor(raw: raw)
-            material.transparency = 0.68
-            material.isDoubleSided = true
-            meshGeometry.materials = [material]
-            parent.addChildNode(SCNNode(geometry: meshGeometry))
+            let wireElement = SCNGeometryElement(
+                data: indexData,
+                primitiveType: .triangles,
+                primitiveCount: primitiveCount,
+                bytesPerIndex: MemoryLayout<UInt32>.size
+            )
+            let fillGeometry = SCNGeometry(sources: sources, elements: [fillElement])
+            let fillMaterial = SCNMaterial()
+            fillMaterial.lightingModel = .constant
+            fillMaterial.diffuse.contents = SurfaceClass.uiColor(raw: raw)
+            fillMaterial.transparency = 0.34
+            fillMaterial.isDoubleSided = true
+            fillMaterial.writesToDepthBuffer = true
+            fillMaterial.readsFromDepthBuffer = true
+            fillGeometry.materials = [fillMaterial]
+            let fillNode = SCNNode(geometry: fillGeometry)
+            fillNode.name = "meshFill"
+            fillNode.renderingOrder = 10
+            fillNode.isHidden = style == .hidden
+
+            let wireGeometry = SCNGeometry(sources: sources, elements: [wireElement])
+            let wireMaterial = SCNMaterial()
+            wireMaterial.lightingModel = .constant
+            wireMaterial.diffuse.contents = SurfaceClass.wireUIColor(raw: raw)
+            wireMaterial.fillMode = .lines
+            wireMaterial.isDoubleSided = true
+            wireMaterial.writesToDepthBuffer = false
+            wireMaterial.readsFromDepthBuffer = true
+            wireGeometry.materials = [wireMaterial]
+            let wireNode = SCNNode(geometry: wireGeometry)
+            wireNode.name = "meshWire"
+            wireNode.renderingOrder = 11
+            wireNode.isHidden = style != .wireAndFill
+
+            parent.addChildNode(fillNode)
+            parent.addChildNode(wireNode)
         }
         return parent
     }

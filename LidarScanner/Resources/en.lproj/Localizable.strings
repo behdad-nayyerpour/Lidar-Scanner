@@ -62,6 +62,9 @@
 "scan.processing.color" = "Adding color from the camera";
 "scan.processing.save" = "Saving the scan";
 "scan.processing.geometry" = "Saving the mesh";
+"overlay.both" = "Wireframe and fill";
+"overlay.fill" = "Fill only";
+"overlay.off" = "Hide mesh";
 "color.add" = "Add color";
 "color.working" = "Adding color";
 "color.cancel" = "Cancel color";

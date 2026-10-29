@@ -10,7 +10,7 @@ Bundle identifier: `com.example.lidarscanner` (change it in `project.yml` before
 
 ## What you can do
 
-- Scan a room with ARKit scene reconstruction and a live, classification-colored mesh.
+- Scan a room with ARKit scene reconstruction. Covered surfaces show a triangle wireframe and a semi-transparent color fill over the camera. A control switches that to fill only or hides it.
 - Guidance while you scan: pace, light, tracking, and how much surface area has been meshed. Start, pause, resume, restart, and finish.
 - Finish saves the geometry immediately. Camera frames are stored with the scan (capped at 16 small images). Add Color, from the viewer or the library, paints vertex color in the background with progress and cancel.
 - Scan an object two ways:

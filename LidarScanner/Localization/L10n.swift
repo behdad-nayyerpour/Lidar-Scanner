@@ -72,6 +72,9 @@ enum L10n {
     static var scanProcessingColor: String { tr("scan.processing.color", "Adding color from the camera") }
     static var scanProcessingSave: String { tr("scan.processing.save", "Saving the scan") }
     static var scanSavingGeometry: String { tr("scan.processing.geometry", "Saving the mesh") }
+    static var overlayBoth: String { tr("overlay.both", "Wireframe and fill") }
+    static var overlayFill: String { tr("overlay.fill", "Fill only") }
+    static var overlayOff: String { tr("overlay.off", "Hide mesh") }
     static var colorAdd: String { tr("color.add", "Add color") }
     static var colorWorking: String { tr("color.working", "Adding color") }
     static var colorCancel: String { tr("color.cancel", "Cancel color") }
