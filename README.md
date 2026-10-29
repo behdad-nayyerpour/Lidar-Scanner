@@ -15,7 +15,7 @@ Bundle identifier: `com.example.lidarscanner` (change it in `project.yml` before
 - Color the mesh from camera frames. The app keeps viewpoints as you move and samples the best ones onto each vertex.
 - Scan an object two ways:
   - **LiDAR object** — a bounds sphere you place in the room (furniture, fixtures).
-  - **Photo object** — RealityKit `ObjectCaptureSession` guided capture, then on-device `PhotogrammetrySession` reconstruction, on devices that support it.
+  - **Photo object** — RealityKit guided capture, then on-device photogrammetry. iOS only builds the mobile (reduced) detail level; finer levels need a Mac.
 - Crop (triangles are clipped, not only deleted), smooth, simplify by merging nearby vertices, and drop small disconnected fragments. Revert to the original mesh.
 - Measure distance by tapping two points. Units: meters, centimeters, feet, or inches.
 - Export **PLY** (vertex color), **OBJ** (zip with MTL and a baked texture when it fits), **STL** (millimeters or meters, optional Z-up), **USDZ**, and **GLB**.
@@ -119,7 +119,7 @@ User-facing copy goes through `L10n` and `LidarScanner/Resources/en.lproj/Locali
 - Area or volume measurement (distance only).
 - Gaussian splats or NeRF.
 - Persian strings (the key table is ready).
-- High-detail photogrammetry is offered, but it is slow and memory-heavy; Balanced is the default.
+- On-device photogrammetry is limited to Apple's mobile detail level. Preview, medium, full, and raw requests are not available in the iOS SDK.
 
 Object Capture is included, not replaced by LiDAR. LiDAR object mode is still there because it works for things you cannot walk all the way around, and because photo reconstruction can fail or take several minutes. Photo mode only appears when `ObjectCaptureSession` and `PhotogrammetrySession` both report support.
 

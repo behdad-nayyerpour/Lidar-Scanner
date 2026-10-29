@@ -63,7 +63,7 @@ private struct PhotoCaptureRuntime: View {
 
     @ViewBuilder
     private var captureLayer: some View {
-        if let session = model.session, model.phase == .capture || model.phase == .readyToBuild {
+        if let session = model.session, (model.phase == .capture || model.phase == .readyToBuild) {
             ObjectCaptureView(session: session)
                 .ignoresSafeArea()
         } else if model.phase == .unsupported {
@@ -130,7 +130,9 @@ private struct PhotoCaptureRuntime: View {
     private var controls: some View {
         switch model.phase {
         case .readyToBuild:
-            detailPicker
+            Text(L10n.photoDetailCaption)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.8))
             PrimaryButton(title: L10n.photoBuild, systemImage: "cube.transparent") {
                 model.build()
             }
@@ -172,23 +174,6 @@ private struct PhotoCaptureRuntime: View {
             ProgressView().tint(.white)
         default:
             EmptyView()
-        }
-    }
-
-    private var detailPicker: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(L10n.photoDetailCaption)
-                .font(.caption)
-                .foregroundStyle(AppColor.textSecondary)
-            Picker(L10n.photoDetailCaption, selection: Binding(
-                get: { model.detail },
-                set: { model.updateDetail($0) }
-            )) {
-                ForEach(ReconstructionDetail.allCases) { detail in
-                    Text(detail.title).tag(detail)
-                }
-            }
-            .pickerStyle(.segmented)
         }
     }
 
@@ -267,7 +252,9 @@ private struct ReconstructionRuntime: View {
                     .foregroundStyle(AppColor.textSecondary)
                 Text(L10n.shots(model.imageCount, max(model.imageCount, 1)))
                     .font(.headline)
-                detailPicker
+                Text(L10n.photoDetailCaption)
+                    .font(.subheadline)
+                    .foregroundStyle(AppColor.textSecondary)
                 if let message = model.message {
                     Text(message).foregroundStyle(AppColor.danger)
                 }
@@ -292,14 +279,5 @@ private struct ReconstructionRuntime: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
-    }
-
-    private var detailPicker: some View {
-        Picker(L10n.photoDetailCaption, selection: $model.detail) {
-            ForEach(ReconstructionDetail.allCases) { detail in
-                Text(detail.title).tag(detail)
-            }
-        }
-        .pickerStyle(.segmented)
     }
 }

@@ -66,8 +66,8 @@ final class ViewerModel: NSObject, ObservableObject, SCNSceneRendererDelegate {
     }
 
     func resetCamera() {
-        guard let camera = sceneView.pointOfView else { return }
-        SceneFraming.frame(camera, in: sceneView.scene)
+        guard let scene = sceneView.scene, let camera = sceneView.pointOfView else { return }
+        SceneFraming.frame(camera, in: scene)
     }
 
     func clearMeasurements() {

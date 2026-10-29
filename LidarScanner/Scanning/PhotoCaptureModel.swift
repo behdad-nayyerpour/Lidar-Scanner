@@ -1,6 +1,7 @@
 import ARKit
 import Combine
 import RealityKit
+import SwiftUI
 
 enum DeviceCapability {
     @MainActor
@@ -32,14 +33,8 @@ enum ReconstructionDetail: String, CaseIterable, Identifiable {
         }
     }
 
-    var requestDetail: PhotogrammetrySession.Request.Detail {
-        switch self {
-        case .preview: return .preview
-        case .reduced: return .reduced
-        case .medium: return .medium
-        case .full: return .full
-        }
-    }
+    /// iOS reconstruction only offers the reduced, on-device detail level.
+    var requestDetail: PhotogrammetrySession.Request.Detail { .reduced }
 }
 
 @MainActor
@@ -158,7 +153,7 @@ final class PhotoCaptureModel: ObservableObject {
         orbitComplete = session.userCompletedScanPass
         isPaused = session.isPaused
         canShutter = session.canRequestImageCapture
-        feedbackText = Self.feedbackText(session.feedback)
+        feedbackText = Self.describe(session.feedback)
         switch session.state {
         case .initializing:
             captureUI = .initializing
@@ -266,7 +261,7 @@ final class PhotoCaptureModel: ObservableObject {
         }
     }
 
-    static func feedbackText(_ feedback: Set<ObjectCaptureSession.Feedback>) -> String? {
+    static func describe(_ feedback: Set<ObjectCaptureSession.Feedback>) -> String? {
         if feedback.contains(.objectNotDetected) { return L10n.feedbackMissing }
         if feedback.contains(.environmentTooDark) { return L10n.feedbackTooDark }
         if feedback.contains(.environmentLowLight) { return L10n.feedbackLowLight }

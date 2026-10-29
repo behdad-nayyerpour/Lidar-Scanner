@@ -366,7 +366,7 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         for face in stride(from: 0, to: faces.count, by: step) {
             var ids: [SIMD3<Float>] = []
             for corner in 0..<3 {
-                let indexOffset = faces.offset + (face * faces.indexCountPerPrimitive + corner) * faces.bytesPerIndex
+                let indexOffset = (face * faces.indexCountPerPrimitive + corner) * faces.bytesPerIndex
                 let vertexIndex: Int
                 if faces.bytesPerIndex == 4 {
                     vertexIndex = Int(facePointer.advanced(by: indexOffset).assumingMemoryBound(to: UInt32.self).pointee)
@@ -425,7 +425,7 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         for face in 0..<faces.count {
             var cornerIndices: [UInt32] = []
             for corner in 0..<min(3, faces.indexCountPerPrimitive) {
-                let offset = faces.offset + (face * faces.indexCountPerPrimitive + corner) * faces.bytesPerIndex
+                let offset = (face * faces.indexCountPerPrimitive + corner) * faces.bytesPerIndex
                 let localIndex: UInt32
                 if faces.bytesPerIndex == 4 {
                     localIndex = facePointer.advanced(by: offset).assumingMemoryBound(to: UInt32.self).pointee
@@ -480,7 +480,7 @@ enum LiveMeshBuilder {
         indices.reserveCapacity(indexCount)
         let pointer = faces.buffer.contents()
         for index in 0..<indexCount {
-            let offset = faces.offset + faces.bytesPerIndex * index
+            let offset = faces.bytesPerIndex * index
             if faces.bytesPerIndex == 4 {
                 indices.append(pointer.advanced(by: offset).assumingMemoryBound(to: UInt32.self).pointee)
             } else if faces.bytesPerIndex == 2 {

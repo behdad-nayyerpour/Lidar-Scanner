@@ -101,7 +101,7 @@ enum L10n {
     static var photoBuild: String { tr("photo.build", "Build model") }
     static var photoBuilding: String { tr("photo.building", "Building the 3D model") }
     static var photoKeepOpen: String { tr("photo.keepOpen", "Keep the app open. A detailed object can take several minutes.") }
-    static var photoDetailCaption: String { tr("photo.detail.caption", "Higher detail takes longer and uses more memory.") }
+    static var photoDetailCaption: String { tr("photo.detail.caption", "On this iPhone, reconstruction uses the mobile detail level. Higher detail levels need a Mac.") }
     static var photoPreview: String { tr("photo.detail.preview", "Draft") }
     static var photoReduced: String { tr("photo.detail.reduced", "Fast") }
     static var photoMedium: String { tr("photo.detail.medium", "Balanced") }

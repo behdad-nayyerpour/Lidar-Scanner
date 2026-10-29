@@ -90,7 +90,7 @@
 "photo.build" = "Build model";
 "photo.building" = "Building the 3D model";
 "photo.keepOpen" = "Keep the app open. A detailed object can take several minutes.";
-"photo.detail.caption" = "Higher detail takes longer and uses more memory.";
+"photo.detail.caption" = "On this iPhone, reconstruction uses the mobile detail level. Higher detail levels need a Mac.";
 "photo.detail.preview" = "Draft";
 "photo.detail.reduced" = "Fast";
 "photo.detail.medium" = "Balanced";

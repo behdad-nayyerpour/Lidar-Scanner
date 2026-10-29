@@ -76,7 +76,8 @@ enum USDZExtractor {
                 }
             }
             for triangle in triangles {
-                guard triangle.allSatisfy({ $0 < localPositions.count }) else { continue }
+                let limit = UInt32(localPositions.count)
+                guard triangle.0 < limit, triangle.1 < limit, triangle.2 < limit else { continue }
                 mesh.indices.append(base + triangle.0)
                 mesh.indices.append(base + triangle.1)
                 mesh.indices.append(base + triangle.2)
@@ -90,9 +91,7 @@ enum USDZExtractor {
         asset.loadTextures()
         var mesh = ScanMesh()
         for index in 0..<asset.count {
-            if let object = asset.object(at: index) {
-                walk(object, transform: matrix_identity_float4x4, into: &mesh)
-            }
+            walk(asset.object(at: index), transform: matrix_identity_float4x4, into: &mesh)
         }
         return mesh
     }
@@ -103,10 +102,8 @@ enum USDZExtractor {
         if let mdlMesh = object as? MDLMesh {
             append(mdlMesh: mdlMesh, transform: world, into: &mesh)
         }
-        if let children = object.children {
-            for child in children.objects {
-                walk(child, transform: world, into: &mesh)
-            }
+        for child in object.children.objects {
+            walk(child, transform: world, into: &mesh)
         }
     }
 
@@ -141,7 +138,7 @@ enum USDZExtractor {
         _ = normalMap
         _ = colorMap
 
-        for submesh in mdlMesh.submeshes ?? [] {
+        for case let submesh as MDLSubmesh in mdlMesh.submeshes ?? [] {
             guard submesh.geometryType == .triangles else { continue }
             let indexMap = submesh.indexBuffer.map()
             let indexBase = UInt32(base)
