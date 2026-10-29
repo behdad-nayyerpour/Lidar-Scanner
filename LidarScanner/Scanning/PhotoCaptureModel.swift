@@ -262,7 +262,7 @@ final class PhotoCaptureModel: ObservableObject {
     }
 
     static func describe(_ feedback: Set<ObjectCaptureSession.Feedback>) -> String? {
-        if feedback.contains(.objectNotDetected) { return L10n.feedbackMissing }
+        if #available(iOS 17.4, *), feedback.contains(.objectNotDetected) { return L10n.feedbackMissing }
         if feedback.contains(.environmentTooDark) { return L10n.feedbackTooDark }
         if feedback.contains(.environmentLowLight) { return L10n.feedbackLowLight }
         if feedback.contains(.movingTooFast) { return L10n.feedbackFast }
