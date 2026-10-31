@@ -34,8 +34,11 @@ final class TextureCorrectnessTests: XCTestCase {
             XCTFail("JPEG did not load")
             return
         }
-        XCTAssertGreaterThan(loaded.rgba[0], 200, "Top-left pixel must stay red")
-        XCTAssertGreaterThan(loaded.rgba[((loaded.height - 1) * loaded.width) * 4 + 1], 200, "Bottom row must stay green")
+        let bottom = (loaded.height - 1) * loaded.width * 4
+        XCTAssertGreaterThan(loaded.rgba[0], 120, "Top-left pixel must stay red")
+        XCTAssertLessThan(loaded.rgba[1], 80, "Top-left pixel must not become the green bottom row")
+        XCTAssertGreaterThan(loaded.rgba[bottom + 1], 120, "Bottom row must stay green")
+        XCTAssertLessThan(loaded.rgba[bottom], 80, "Bottom row must not become the red top row")
         guard let scaled = KeyframeArchive.loadColor(in: directory, frame: frame, maxDimension: 4) else {
             XCTFail("Scaled JPEG did not load")
             return
