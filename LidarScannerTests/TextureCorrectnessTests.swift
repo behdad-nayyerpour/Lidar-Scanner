@@ -61,6 +61,7 @@ final class TextureCorrectnessTests: XCTestCase {
             (SIMD3(1, 1.55, 1), SIMD3(0, -1, 0))
         ]
         var frames: [StoredKeyframe] = []
+        var firstPicture: RGBAImage?
         let width = 160
         let height = 120
         let fx: Float = 48
@@ -80,6 +81,7 @@ final class TextureCorrectnessTests: XCTestCase {
                 boxMin: boxMin,
                 boxMax: boxMax
             )
+            if index == 0 { firstPicture = picture }
             guard let jpeg = KeyframeArchive.jpegData(picture, quality: 0.95) else {
                 XCTFail("Photo \(index) was not encoded")
                 return
@@ -122,6 +124,20 @@ final class TextureCorrectnessTests: XCTestCase {
             ))
         }
         try KeyframeArchive.writeManifest(frames, to: directory)
+        if let picture = firstPicture {
+            let row = 31
+            let column = 80
+            let pixel = (row * picture.width + column) * 4
+            let pose = camera(position: SIMD3(1, 1, 1), look: SIMD3(1, 0, 0))
+            let far = CameraProjection.worldPoint(u: Float(column) + 0.5, v: Float(row) + 0.5, depth: 1, fx: fx, fy: fy, cx: cx, cy: cy, cameraToWorld: pose.cameraToWorld)
+            let origin = SIMD3<Float>(pose.cameraToWorld.columns.3.x, pose.cameraToWorld.columns.3.y, pose.cameraToWorld.columns.3.z)
+            let hit = rayBox(origin: origin, direction: simd_normalize(far - origin), boxMin: boxMin, boxMax: boxMax)
+            XCTAssertGreaterThan(
+                Int(picture.rgba[pixel]),
+                200,
+                String(format: "raw render row %d is (%d,%d,%d), far=(%.2f,%.2f,%.2f) hit=(%.2f,%.2f,%.2f) up=(%.2f,%.2f,%.2f)", row, picture.rgba[pixel], picture.rgba[pixel + 1], picture.rgba[pixel + 2], far.x, far.y, far.z, hit?.x ?? -9, hit?.y ?? -9, hit?.z ?? -9, pose.cameraToWorld.columns.1.x, pose.cameraToWorld.columns.1.y, pose.cameraToWorld.columns.1.z)
+            )
+        }
         try assertPhotoSample(directory: directory, frame: frames[0], world: SIMD3(2, 1.6, 1), expected: SIMD3(1, 0, 0), label: "upper +X wall")
         try assertPhotoSample(directory: directory, frame: frames[0], world: SIMD3(2, 0.4, 1), expected: SIMD3(0, 0, 1), label: "lower +X wall")
         var settings = FusionSettings.fast
