@@ -127,9 +127,7 @@ final class FusionSelfTests: XCTestCase {
         let coverage = MeshCoverage.fraction(of: reference, near: mesh, tolerance: 0.06)
         XCTAssertGreaterThan(coverage, 0.8)
 
-        var holed = mesh
-        holed.indices.removeLast(min(holed.indices.count / 2, holed.indices.count))
-        let repaired = MeshCoverage.fillingGaps(fused: holed, reference: reference, tolerance: 0.06)
+        let repaired = MeshCoverage.fillingGaps(fused: ScanMesh(), reference: reference, tolerance: 0.06)
         let repairedCoverage = MeshCoverage.fraction(of: reference, near: repaired, tolerance: 0.06)
         XCTAssertGreaterThan(repairedCoverage, 0.9)
     }
@@ -247,20 +245,32 @@ final class FusionSelfTests: XCTestCase {
     }
 
     private func boxMesh(min boxMin: SIMD3<Float>, max boxMax: SIMD3<Float>) -> ScanMesh {
-        let corners = [
-            SIMD3(boxMin.x, boxMin.y, boxMin.z), SIMD3(boxMax.x, boxMin.y, boxMin.z),
-            SIMD3(boxMin.x, boxMax.y, boxMin.z), SIMD3(boxMax.x, boxMax.y, boxMin.z),
-            SIMD3(boxMin.x, boxMin.y, boxMax.z), SIMD3(boxMax.x, boxMin.y, boxMax.z),
-            SIMD3(boxMin.x, boxMax.y, boxMax.z), SIMD3(boxMax.x, boxMax.y, boxMax.z)
-        ]
-        let quads: [(Int, Int, Int, Int)] = [
-            (0, 1, 3, 2), (4, 6, 7, 5), (0, 2, 6, 4), (1, 5, 7, 3), (0, 4, 5, 1), (2, 3, 7, 6)
-        ]
         var mesh = ScanMesh()
-        mesh.positions = corners
-        for quad in quads {
-            mesh.indices.append(contentsOf: [UInt32(quad.0), UInt32(quad.1), UInt32(quad.2), UInt32(quad.0), UInt32(quad.2), UInt32(quad.3)])
+        func add(_ origin: SIMD3<Float>, _ edgeU: SIMD3<Float>, _ edgeV: SIMD3<Float>, _ nu: Int, _ nv: Int) {
+            let base = mesh.positions.count
+            for y in 0...nv {
+                for x in 0...nu {
+                    mesh.positions.append(origin + edgeU * (Float(x) / Float(nu)) + edgeV * (Float(y) / Float(nv)))
+                }
+            }
+            let stride = nu + 1
+            for y in 0..<nv {
+                for x in 0..<nu {
+                    let i0 = base + y * stride + x
+                    let i1 = i0 + 1
+                    let i2 = i0 + stride
+                    let i3 = i2 + 1
+                    mesh.indices.append(contentsOf: [UInt32(i0), UInt32(i1), UInt32(i3), UInt32(i0), UInt32(i3), UInt32(i2)])
+                }
+            }
         }
+        let size = boxMax - boxMin
+        add(boxMin, SIMD3(size.x, 0, 0), SIMD3(0, 0, size.z), 40, 40)
+        add(SIMD3(boxMin.x, boxMax.y, boxMin.z), SIMD3(size.x, 0, 0), SIMD3(0, 0, size.z), 40, 40)
+        add(boxMin, SIMD3(0, size.y, 0), SIMD3(0, 0, size.z), 24, 40)
+        add(SIMD3(boxMax.x, boxMin.y, boxMin.z), SIMD3(0, size.y, 0), SIMD3(0, 0, size.z), 24, 40)
+        add(boxMin, SIMD3(size.x, 0, 0), SIMD3(0, size.y, 0), 40, 24)
+        add(SIMD3(boxMin.x, boxMin.y, boxMax.z), SIMD3(size.x, 0, 0), SIMD3(0, size.y, 0), 40, 24)
         return mesh
     }
 }
