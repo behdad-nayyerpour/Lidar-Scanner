@@ -20,12 +20,13 @@ enum AtlasTexturer {
         progress?(0.2)
         let chosen = selectViews(mesh: mesh, directory: directory, frames: frames, settings: settings, signal: signal)
         progress?(0.45)
-        guard var image = rasterize(mesh: mesh, directory: directory, frames: frames, chosen: chosen, settings: settings, signal: signal) else {
+        guard var atlas = rasterize(mesh: mesh, directory: directory, frames: frames, chosen: chosen, settings: settings, signal: signal) else {
             return nil
         }
-        image = fillUncovered(mesh: mesh, image: image, chosen: chosen)
+        atlas = fillUncovered(mesh: mesh, image: atlas, chosen: chosen)
         progress?(0.92)
-        paintVertexColors(&mesh, image: image)
+        paintVertexColors(&mesh, image: atlas)
+        guard let image = atlas.uiImage() else { return nil }
         progress?(1)
         return (mesh, image)
     }
