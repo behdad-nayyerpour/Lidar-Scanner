@@ -213,8 +213,8 @@ final class FusionSelfTests: XCTestCase {
     }
 
     private func rayBox(origin: SIMD3<Float>, direction: SIMD3<Float>, boxMin: SIMD3<Float>, boxMax: SIMD3<Float>) -> SIMD3<Float>? {
-        var tMin: Float = 0.05
-        var tMax: Float = 20
+        var tMin: Float = -1_000
+        var tMax: Float = 1_000
         for axis in 0..<3 {
             let originAxis = origin[axis]
             let directionAxis = direction[axis]
@@ -229,7 +229,9 @@ final class FusionSelfTests: XCTestCase {
             tMax = min(tMax, t2)
             if tMin > tMax { return nil }
         }
-        return origin + direction * tMin
+        guard tMax > 0.05 else { return nil }
+        let t = tMin > 0.05 ? tMin : tMax
+        return origin + direction * t
     }
 
     private func distanceToBox(_ point: SIMD3<Float>, min boxMin: SIMD3<Float>, max boxMax: SIMD3<Float>) -> Float {
