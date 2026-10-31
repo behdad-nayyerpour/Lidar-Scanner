@@ -122,6 +122,8 @@ final class TextureCorrectnessTests: XCTestCase {
             ))
         }
         try KeyframeArchive.writeManifest(frames, to: directory)
+        try assertPhotoSample(directory: directory, frame: frames[0], world: SIMD3(2, 1.6, 1), expected: SIMD3(1, 0, 0), label: "upper +X wall")
+        try assertPhotoSample(directory: directory, frame: frames[0], world: SIMD3(2, 0.4, 1), expected: SIMD3(0, 0, 1), label: "lower +X wall")
         var settings = FusionSettings.fast
         settings.textureSize = 512
         settings.maxRange = 8
@@ -139,6 +141,7 @@ final class TextureCorrectnessTests: XCTestCase {
         var correct = 0
         var checked = 0
         var missing = 0
+        var examples: [String] = []
         let result = textured.mesh
         for triangle in 0..<result.triangleCount {
             let ids = (0..<3).map { Int(result.indices[triangle * 3 + $0]) }
@@ -149,12 +152,16 @@ final class TextureCorrectnessTests: XCTestCase {
             guard let expected = surfaceColor(at: center, min: boxMin, max: boxMax) else { continue }
             let color = (result.colors[ids[0]] + result.colors[ids[1]] + result.colors[ids[2]]) / 3
             checked += 1
-            if matches(color, expected) { correct += 1 }
+            if matches(color, expected) {
+                correct += 1
+            } else if examples.count < 8 {
+                examples.append(String(format: "(%.2f,%.2f,%.2f) got (%.2f,%.2f,%.2f) want (%.2f,%.2f,%.2f)", center.x, center.y, center.z, color.x, color.y, color.z, expected.x, expected.y, expected.z))
+            }
             if color.x > 0.92 && color.y > 0.92 && color.z > 0.92 { missing += 1 }
             if simd_distance(color, SIMD3(repeating: 0.72)) < 0.06 { missing += 1 }
         }
         XCTAssertGreaterThan(checked, 100)
-        XCTAssertGreaterThan(Float(correct) / Float(max(checked, 1)), 0.95, "\(correct) of \(checked) visible faces matched their wall")
+        XCTAssertGreaterThan(Float(correct) / Float(max(checked, 1)), 0.95, "\(correct) of \(checked) visible faces matched their wall. \(examples.joined(separator: " | "))")
         XCTAssertLessThan(Float(missing) / Float(max(checked, 1)), 0.05)
 
         let uv = result.uvs[0]
@@ -269,6 +276,26 @@ final class TextureCorrectnessTests: XCTestCase {
             }
         }
         return total
+    }
+
+    private func assertPhotoSample(directory: URL, frame: StoredKeyframe, world: SIMD3<Float>, expected: SIMD3<Float>, label: String) throws {
+        guard let loaded = KeyframeArchive.loadColor(in: directory, frame: frame, maxDimension: 1600) else {
+            XCTFail("\(label) photo did not load")
+            return
+        }
+        guard let hit = CameraProjection.pixel(world: world, viewMatrix: frame.viewMatrix, fx: frame.fx, fy: frame.fy, cx: frame.cx, cy: frame.cy) else {
+            XCTFail("\(label) did not project")
+            return
+        }
+        let x = min(loaded.width - 1, max(0, Int(hit.pixel.x.rounded())))
+        let y = min(loaded.height - 1, max(0, Int(hit.pixel.y.rounded())))
+        let pixel = (y * loaded.width + x) * 4
+        let rgb = SIMD3(Float(loaded.rgba[pixel]) / 255, Float(loaded.rgba[pixel + 1]) / 255, Float(loaded.rgba[pixel + 2]) / 255)
+        XCTAssertLessThan(
+            simd_distance(rgb, expected),
+            0.34,
+            String(format: "%@ u=%.1f v=%.1f depth=%.2f rgb=(%.2f,%.2f,%.2f) image=%dx%d", label, hit.pixel.x, hit.pixel.y, hit.depth, rgb.x, rgb.y, rgb.z, loaded.width, loaded.height)
+        )
     }
 
     private func matches(_ color: SIMD3<Float>, _ expected: SIMD3<Float>) -> Bool {
@@ -476,24 +503,12 @@ final class TextureCorrectnessTests: XCTestCase {
     }
 
     private func topOriginPixels(_ image: UIImage) -> (rgba: [UInt8], width: Int, height: Int)? {
-        guard let cgImage = image.cgImage else { return nil }
+        guard let cgImage = image.cgImage, let provider = cgImage.dataProvider?.data else { return nil }
+        let data = provider as Data
         let width = cgImage.width
         let height = cgImage.height
-        var rgba = [UInt8](repeating: 0, count: width * height * 4)
-        let info = CGBitmapInfo.byteOrder32Big.union(CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue))
-        guard let context = CGContext(
-            data: &rgba,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: info.rawValue
-        ) else { return nil }
-        context.translateBy(x: 0, y: CGFloat(height))
-        context.scaleBy(x: 1, y: -1)
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return (rgba, width, height)
+        guard data.count >= width * height * 4 else { return nil }
+        return ([UInt8](data), width, height)
     }
 
     private func intValue(_ value: Any?) -> Int? {

@@ -284,12 +284,12 @@ enum AtlasTexturer {
             let column = triangle % grid
             let row = triangle / grid
             // Gutter is wide enough that a 1px dilate cannot bleed into the next chart, even at 80k faces.
-            let pad = 0.32 / Float(grid)
-            let top = 1 - (Float(row) + pad) / Float(grid)
-            let bottom = 1 - (Float(row + 1) - pad) / Float(grid)
+            let inset: Float = 0.22
+            let top = 1 - (Float(row) + inset) / Float(grid)
+            let bottom = 1 - (Float(row + 1) - inset) / Float(grid)
             let corners = [
-                SIMD2((Float(column) + pad) / Float(grid), bottom),
-                SIMD2((Float(column + 1) - pad) / Float(grid), bottom),
+                SIMD2((Float(column) + inset) / Float(grid), bottom),
+                SIMD2((Float(column + 1) - inset) / Float(grid), bottom),
                 SIMD2((Float(column) + 0.5) / Float(grid), top)
             ]
             let start = UInt32(result.positions.count)
@@ -511,11 +511,15 @@ enum AtlasTexturer {
         let minY = max(0, Int(floor(min(pixels[0].y, min(pixels[1].y, pixels[2].y)))))
         let maxY = min(image.height - 1, Int(ceil(max(pixels[0].y, max(pixels[1].y, pixels[2].y)))))
         guard minX <= maxX, minY <= maxY else { return }
-        var depths: [Float] = []
-        for point in world {
-            let camera = frame.viewMatrix * SIMD4(point.x, point.y, point.z, 1)
-            depths.append(max(0.05, -camera.z))
-        }
+        let centroid = (world[0] + world[1] + world[2]) / 3
+        guard let projected = CameraProjection.pixel(
+            world: centroid,
+            viewMatrix: frame.viewMatrix,
+            fx: frame.fx * scaleX,
+            fy: frame.fy * scaleY,
+            cx: frame.cx * scaleX,
+            cy: frame.cy * scaleY
+        ), let sample = bilinear(color, projected.pixel.x, projected.pixel.y) else { return }
         for y in minY...maxY {
             for x in minX...maxX {
                 let p = SIMD2<Float>(Float(x) + 0.5, Float(y) + 0.5)
@@ -523,21 +527,7 @@ enum AtlasTexturer {
                 let w1 = edge(pixels[2], pixels[0], p)
                 let w2 = edge(pixels[0], pixels[1], p)
                 let inside = (w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)
-                if !inside { continue }
-                let sum = w0 + w1 + w2
-                if abs(sum) < 1e-5 { continue }
-                let b0 = w0 / sum
-                let b1 = w1 / sum
-                let b2 = w2 / sum
-                let inverse = b0 / depths[0] + b1 / depths[1] + b2 / depths[2]
-                guard inverse > 1e-6 else { continue }
-                let c0 = (b0 / depths[0]) / inverse
-                let c1 = (b1 / depths[1]) / inverse
-                let c2 = (b2 / depths[2]) / inverse
-                let worldPoint = world[0] * c0 + world[1] * c1 + world[2] * c2
-                guard let projected = CameraProjection.pixel(world: worldPoint, viewMatrix: frame.viewMatrix, fx: frame.fx * scaleX, fy: frame.fy * scaleY, cx: frame.cx * scaleX, cy: frame.cy * scaleY) else { continue }
-                guard let sample = bilinear(color, projected.pixel.x, projected.pixel.y) else { continue }
-                image.set(x, y, sample)
+                if inside { image.set(x, y, sample) }
             }
         }
     }
