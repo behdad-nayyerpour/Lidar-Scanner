@@ -73,7 +73,7 @@ enum FusionVoxel {
     /// LiDAR depth is about 256×192, so a pixel at 2.5 m is roughly a centimeter. Voxels finer than that only invent streaks.
     static func millimeters(requested: Float, frames: [StoredKeyframe]) -> Float {
         var footprints: [Float] = []
-        for frame in frames where frame.depthWidth > 1, frame.fx > 1, frame.width > 1 {
+        for frame in frames where frame.depthWidth > 1 && frame.fx > 1 && frame.width > 1 {
             let fxDepth = frame.fx * Float(frame.depthWidth) / Float(frame.width)
             footprints.append(2.5 / fxDepth * 1000)
         }
