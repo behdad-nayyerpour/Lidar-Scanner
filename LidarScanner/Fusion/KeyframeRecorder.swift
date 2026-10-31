@@ -92,7 +92,7 @@ final class KeyframeRecorder: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             guard let image = PixelSampler.rgbaImage(from: colorCopy, maxDimension: 1920, imageResolution: resolution) else { return }
-            guard let jpeg = Self.jpegData(image) else { return }
+            guard let jpeg = KeyframeArchive.jpegData(image) else { return }
             let colorURL = KeyframeArchive.colorURL(in: folder, index: index)
             try? FileManager.default.createDirectory(at: colorURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? jpeg.write(to: colorURL, options: .atomic)
@@ -225,26 +225,6 @@ final class KeyframeRecorder: @unchecked Sendable {
         }
         guard count > 0 else { return SIMD3(repeating: 128) }
         return sum / count
-    }
-
-    private static func jpegData(_ image: RGBAImage) -> Data? {
-        let info = CGBitmapInfo.byteOrder32Big.union(CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue))
-        let data = Data(image.rgba) as CFData
-        guard let provider = CGDataProvider(data: data),
-              let cgImage = CGImage(
-                width: image.width,
-                height: image.height,
-                bitsPerComponent: 8,
-                bitsPerPixel: 32,
-                bytesPerRow: image.width * 4,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: info,
-                provider: provider,
-                decode: nil,
-                shouldInterpolate: false,
-                intent: .defaultIntent
-              ) else { return nil }
-        return UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.82)
     }
 
     private static func copyConfidence(_ map: CVPixelBuffer, width: Int, height: Int, sourceWidth: Int, sourceHeight: Int) -> [UInt8] {

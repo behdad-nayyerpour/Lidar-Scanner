@@ -48,10 +48,9 @@ enum ScanProcessor {
                 notice = L10n.qualityFellBack
                 working = reference
             } else {
-                working = fused.removingSmallComponents(minimumAreaFraction: 0.008)
-                let beforeFill = MeshCoverage.fraction(of: reference, near: working, tolerance: tolerance)
-                working = MeshCoverage.fillingGaps(fused: working, reference: reference, tolerance: tolerance)
-                if beforeFill < 0.92 {
+                let closed = closeGaps(in: fused, reference: reference, settings: settings, tolerance: tolerance)
+                working = closed.mesh
+                if closed.coveredBeforeFill < 0.92 {
                     notice = L10n.qualityFilledGaps
                 }
                 replaced = true
@@ -61,18 +60,12 @@ enum ScanProcessor {
             return BuildResult(mesh: working, texture: nil, notice: nil, replacedGeometry: replaced)
         }
         progress?(0.48, L10n.qualityWorkingClean)
-        if replaced {
-            if settings.smoothIterations > 0 {
-                working = working.taubinSmoothed(iterations: settings.smoothIterations)
-            }
-            working = working.simplified(targetTriangles: settings.targetTriangles)
-            working.recomputeNormals()
-        }
         if signal?.isCancelled == true || frames.isEmpty {
             return BuildResult(mesh: working, texture: nil, notice: notice, replacedGeometry: replaced)
         }
         progress?(0.55, L10n.qualityStageAtlas)
         let textureStarted = CFAbsoluteTimeGetCurrent()
+        let tolerance = max(0.04, settings.voxelSize * 4)
         guard let textured = AtlasTexturer.texture(
             mesh: working,
             directory: directory,
@@ -80,15 +73,35 @@ enum ScanProcessor {
             settings: settings,
             signal: signal,
             progress: { fraction in
-                let stage = fraction < 0.52 ? L10n.qualityStageAtlas : (fraction < 0.72 ? L10n.qualityStageViews : L10n.qualityStagePaint)
+                let stage = fraction < 0.2 ? L10n.qualityStageAtlas : (fraction < 0.72 ? L10n.qualityStageViews : L10n.qualityStagePaint)
                 progress?(0.55 + 0.43 * fraction, stage)
-            }
+            },
+            reference: reference,
+            fillTolerance: tolerance
         ) else {
             Log.scan.info("texture stopped ms=\(ScanTiming.milliseconds(since: textureStarted), privacy: .public)")
             return BuildResult(mesh: working, texture: nil, notice: notice, replacedGeometry: replaced)
         }
         Log.scan.info("texture faces=\(textured.mesh.triangleCount, privacy: .public) ms=\(ScanTiming.milliseconds(since: textureStarted), privacy: .public)")
         return BuildResult(mesh: textured.mesh, texture: textured.image, notice: notice, replacedGeometry: replaced)
+    }
+
+    /// Smooth and decimate first, then copy original triangles into the holes.
+    /// Filled triangles are not connected to the fused vertices, so smoothing them afterwards collapses each one.
+    static func closeGaps(
+        in fused: ScanMesh,
+        reference: ScanMesh,
+        settings: FusionSettings,
+        tolerance: Float
+    ) -> (mesh: ScanMesh, coveredBeforeFill: Float) {
+        var working = fused.removingSmallComponents(minimumAreaFraction: 0.008)
+        if settings.smoothIterations > 0 {
+            working = working.taubinSmoothed(iterations: settings.smoothIterations)
+        }
+        working = working.simplified(targetTriangles: settings.targetTriangles)
+        let coveredBeforeFill = MeshCoverage.fraction(of: reference, near: working, tolerance: tolerance)
+        working = MeshCoverage.fillingGaps(fused: working, reference: reference, tolerance: tolerance)
+        return (working, coveredBeforeFill)
     }
 }
 

@@ -122,6 +122,12 @@ enum KeyframeArchive {
         return (DepthImage(values: values, width: width, height: height), confidence)
     }
 
+    /// JPEG bytes for an image whose first row is the top of the sensor picture (v = 0).
+    static func jpegData(_ image: RGBAImage, quality: CGFloat = 0.82) -> Data? {
+        guard let cgImage = cgImage(from: image) else { return nil }
+        return UIImage(cgImage: cgImage).jpegData(compressionQuality: quality)
+    }
+
     static func loadColor(in directory: URL, frame: StoredKeyframe, maxDimension: Int) -> RGBAImage? {
         let url = colorURL(in: directory, index: frame.index)
         guard let image = UIImage(contentsOfFile: url.path), let cgImage = image.cgImage else { return nil }
@@ -143,6 +149,9 @@ enum KeyframeArchive {
             space: colorSpace,
             bitmapInfo: info.rawValue
         ) else { return nil }
+        // Bitmap memory starts at the bottom. Flip so row 0 stays the top of the photo, matching camera v.
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
         let scaleX = Float(width) / Float(frame.width)
         let scaleY = Float(height) / Float(frame.height)
@@ -226,6 +235,25 @@ enum KeyframeArchive {
             return UIImage(cgImage: image).pngData()
         }
     }
+}
+
+private func cgImage(from image: RGBAImage) -> CGImage? {
+    let info = CGBitmapInfo.byteOrder32Big.union(CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue))
+    let data = Data(image.rgba) as CFData
+    guard let provider = CGDataProvider(data: data) else { return nil }
+    return CGImage(
+        width: image.width,
+        height: image.height,
+        bitsPerComponent: 8,
+        bitsPerPixel: 32,
+        bytesPerRow: image.width * 4,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: info,
+        provider: provider,
+        decode: nil,
+        shouldInterpolate: false,
+        intent: .defaultIntent
+    )
 }
 
 private func readUInt16(_ data: Data, _ cursor: inout Int) throws -> UInt16 {

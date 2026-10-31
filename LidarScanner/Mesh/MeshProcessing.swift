@@ -159,7 +159,7 @@ extension ScanMesh {
         guard steps > 0, positions.count > 2 else { return self }
         let adjacency = neighborLists()
         var current = positions
-        let blend = min(0.9, max(0, lambda))
+        let blend = min(0.9, max(-0.9, lambda))
         for _ in 0..<steps {
             var next = current
             for index in current.indices {

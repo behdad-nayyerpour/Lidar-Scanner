@@ -116,7 +116,7 @@ User-facing copy goes through `L10n` and `LidarScanner/Resources/en.lproj/Locali
 
 - Accounts, cloud sync, or a collaboration link.
 - A floor plan or BIM export. The mesh itself exports as DXF triangle faces. Classification is stored and can be shown in the viewer; it is not exported as a separate semantic file.
-- A photo-quality UV unwrap of the original camera images for room scans. Color is sampled onto vertices, then baked into a texture atlas for formats that expect a texture.
+- A continuous UV unwrap. Each triangle is textured from the single photo that sees it, in its own atlas cell, so a wall cannot pick up the floor.
 - Area or volume measurement (distance only).
 - Gaussian splats or NeRF.
 - Persian strings (the key table is ready).

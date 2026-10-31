@@ -162,7 +162,13 @@ extension ScanMesh {
         let geometry = SCNGeometry(sources: sources, elements: [element])
         let material = SCNMaterial()
         material.lightingModel = .constant
+        // Atlas memory row 0 is the top of the photo. Stored UV v = 1 addresses that row, which is SceneKit's top.
         material.diffuse.contents = image
+        material.diffuse.wrapS = .clamp
+        material.diffuse.wrapT = .clamp
+        material.diffuse.mipFilter = .nearest
+        material.diffuse.magnificationFilter = .nearest
+        material.diffuse.minificationFilter = .nearest
         material.isDoubleSided = true
         geometry.materials = [material]
         return geometry

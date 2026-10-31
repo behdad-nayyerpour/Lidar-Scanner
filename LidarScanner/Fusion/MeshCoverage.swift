@@ -32,12 +32,29 @@ enum MeshCoverage {
             let i1 = Int(reference.indices[triangle * 3 + 1])
             let i2 = Int(reference.indices[triangle * 3 + 2])
             guard i0 < reference.positions.count, i1 < reference.positions.count, i2 < reference.positions.count else { continue }
-            let center = (reference.positions[i0] + reference.positions[i1] + reference.positions[i2]) / 3
-            if index.distance(to: center) <= tolerance { continue }
+            let a = reference.positions[i0]
+            let b = reference.positions[i1]
+            let c = reference.positions[i2]
+            let center = (a + b + c) / 3
+            let samples = [center, a, b, c]
+            let near = samples.reduce(0) { count, sample in
+                count + (index.distance(to: sample) <= tolerance ? 1 : 0)
+            }
+            // One stray vertex near the middle of a hole is not coverage. Most of the triangle has to sit on the fused surface.
+            if near >= 3 { continue }
+            let geometric = simd_cross(b - a, c - a)
+            let authored = i0 < reference.normals.count ? reference.normals[i0] : geometric
+            let flip = simd_length(authored) > 1e-4 && simd_dot(geometric, authored) < 0
             let start = UInt32(mesh.positions.count)
-            mesh.positions.append(reference.positions[i0])
-            mesh.positions.append(reference.positions[i1])
-            mesh.positions.append(reference.positions[i2])
+            if flip {
+                mesh.positions.append(a)
+                mesh.positions.append(c)
+                mesh.positions.append(b)
+            } else {
+                mesh.positions.append(a)
+                mesh.positions.append(b)
+                mesh.positions.append(c)
+            }
             mesh.indices.append(contentsOf: [start, start + 1, start + 2])
         }
         mesh.recomputeNormals()

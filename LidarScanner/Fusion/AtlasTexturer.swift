@@ -18,37 +18,41 @@ enum AtlasTexturer {
         frames allFrames: [StoredKeyframe],
         settings: FusionSettings,
         signal: WorkSignal?,
-        progress: ((Double) -> Void)?
+        progress: ((Double) -> Void)?,
+        reference: ScanMesh? = nil,
+        fillTolerance: Float = 0.05
     ) -> (mesh: ScanMesh, image: UIImage)? {
         guard source.triangleCount > 8, !allFrames.isEmpty else { return nil }
         if signal?.isCancelled == true { return nil }
-        let faceCap = settings.preset == "hd" ? 80_000 : 48_000
+        // One chart per triangle is cheap. The cap only exists so a 300k capture still finishes;
+        // gap fill runs after it, or the decimator would open the holes we just closed.
+        let faceCap = settings.preset == "hd" ? 120_000 : 80_000
         var prepared = source
         if prepared.triangleCount > faceCap {
-            progress?(0.01)
+            progress?(0.02)
             let started = CFAbsoluteTimeGetCurrent()
             prepared = prepared.simplified(targetTriangles: faceCap)
             Log.scan.info("texture decimate faces=\(prepared.triangleCount, privacy: .public) ms=\(ScanTiming.milliseconds(since: started), privacy: .public)")
+            if let reference {
+                prepared = MeshCoverage.fillingGaps(fused: prepared, reference: reference, tolerance: fillTolerance)
+            }
         }
         let frames = spreadFrames(allFrames, limit: 48)
-        progress?(0.04)
-        var mesh = unwrap(prepared, resolution: min(settings.textureSize, 2048), signal: signal) { fraction in
-            progress?(0.04 + 0.46 * fraction)
-        }
+        progress?(0.08)
+        var mesh = gridUnwrap(prepared)
+        progress?(0.2)
         guard mesh.uvs.count == mesh.positions.count, mesh.triangleCount > 0 else { return nil }
-        mesh.recomputeNormals()
-        progress?(0.52)
-        let chosen = chooseViews(mesh: mesh, frames: frames, settings: settings, signal: signal) { fraction in
-            progress?(0.52 + 0.18 * fraction)
+        let chosen = bestViewPerFace(mesh: mesh, directory: directory, frames: frames, settings: settings, signal: signal) { fraction in
+            progress?(0.2 + 0.5 * fraction)
         }
         progress?(0.72)
         guard var atlas = rasterize(mesh: mesh, directory: directory, frames: frames, chosen: chosen, settings: settings, signal: signal, progress: { fraction in
-            progress?(0.7 + 0.25 * fraction)
+            progress?(0.72 + 0.2 * fraction)
         }) else {
             return nil
         }
         atlas = fillUncovered(mesh: mesh, image: atlas, chosen: chosen)
-        progress?(0.92)
+        progress?(0.94)
         paintVertexColors(&mesh, image: atlas)
         guard let image = atlas.uiImage() else { return nil }
         progress?(1)
@@ -79,6 +83,66 @@ enum AtlasTexturer {
         let length = simd_length(forwardA) * simd_length(forwardB)
         guard length > 1e-4 else { return 0 }
         return acos(min(1, max(-1, simd_dot(forwardA, forwardB) / length)))
+    }
+
+    /// Each face keeps the one photo that sees it best. No chart voting, so a wall cannot inherit the floor's picture.
+    private static func bestViewPerFace(
+        mesh: ScanMesh,
+        directory: URL,
+        frames: [StoredKeyframe],
+        settings: FusionSettings,
+        signal: WorkSignal?,
+        progress: ((Double) -> Void)?
+    ) -> [Int] {
+        let depths: [DepthImage?] = frames.map { frame in
+            guard let loaded = try? KeyframeArchive.readDepth(at: KeyframeArchive.depthURL(in: directory, index: frame.index)) else {
+                return nil
+            }
+            return loaded.0
+        }
+        var chosen = [Int](repeating: -1, count: mesh.triangleCount)
+        for triangle in 0..<mesh.triangleCount {
+            if triangle & 255 == 0 {
+                if signal?.isCancelled == true { break }
+                progress?(Double(triangle) / Double(max(mesh.triangleCount, 1)))
+            }
+            let ids = (0..<3).map { Int(mesh.indices[triangle * 3 + $0]) }
+            guard ids.allSatisfy({ $0 < mesh.positions.count }) else { continue }
+            let points = ids.map { mesh.positions[$0] }
+            let centroid = (points[0] + points[1] + points[2]) / 3
+            let stored = ids.reduce(SIMD3<Float>.zero) { partial, index in
+                partial + (index < mesh.normals.count ? mesh.normals[index] : .zero)
+            }
+            let geometric = faceNormal(points)
+            let normal = simd_length(stored) > 0.5 ? simd_normalize(stored) : geometric
+            chosen[triangle] = pickView(points: points, centroid: centroid, normal: normal, frames: frames, depths: depths, settings: settings, relaxed: false)
+                ?? pickView(points: points, centroid: centroid, normal: normal, frames: frames, depths: depths, settings: settings, relaxed: true)
+                ?? pickView(points: points, centroid: centroid, normal: -normal, frames: frames, depths: depths, settings: settings, relaxed: true)
+                ?? -1
+        }
+        return chosen
+    }
+
+    private static func pickView(
+        points: [SIMD3<Float>],
+        centroid: SIMD3<Float>,
+        normal: SIMD3<Float>,
+        frames: [StoredKeyframe],
+        depths: [DepthImage?],
+        settings: FusionSettings,
+        relaxed: Bool
+    ) -> Int? {
+        var best: Int?
+        var bestScore: Float = 0
+        for (frameIndex, frame) in frames.enumerated() {
+            let depth = frameIndex < depths.count ? depths[frameIndex] : nil
+            guard let score = scoreFace(points: points, centroid: centroid, normal: normal, frame: frame, lidar: depth, settings: settings, relaxed: relaxed) else { continue }
+            if score > bestScore {
+                bestScore = score
+                best = frameIndex
+            }
+        }
+        return best
     }
 
     /// One photo per 35 cm patch. Scoring patches, not every face against every frame, is what keeps a room build under a minute.
@@ -125,7 +189,7 @@ enum AtlasTexturer {
             var bestScore: Float = 0
             for (frameIndex, frame) in frames.enumerated() {
                 if frameIndex < maps.count, let map = maps[frameIndex], hidden(centroid, frame: frame, map: map) { continue }
-                guard let score = scoreFace(points: points, centroid: centroid, normal: normal, frame: frame, buffer: nil, settings: settings, relaxed: false) else { continue }
+                guard let score = scoreFace(points: points, centroid: centroid, normal: normal, frame: frame, lidar: nil, settings: settings, relaxed: false) else { continue }
                 if score > bestScore {
                     bestScore = score
                     best = frameIndex
@@ -133,7 +197,7 @@ enum AtlasTexturer {
             }
             if best < 0 {
                 for (frameIndex, frame) in frames.enumerated() {
-                    guard let score = scoreFace(points: points, centroid: centroid, normal: normal, frame: frame, buffer: nil, settings: settings, relaxed: true) else { continue }
+                    guard let score = scoreFace(points: points, centroid: centroid, normal: normal, frame: frame, lidar: nil, settings: settings, relaxed: true) else { continue }
                     if score > bestScore {
                         bestScore = score
                         best = frameIndex
@@ -208,13 +272,19 @@ enum AtlasTexturer {
         return gridUnwrap(mesh)
     }
 
+    /// One non-overlapping chart per triangle. UV v = 1 is the top of the atlas, matching SceneKit and the paint path.
     private static func gridUnwrap(_ mesh: ScanMesh) -> ScanMesh {
         let grid = max(1, Int(ceil(sqrt(Double(mesh.triangleCount)))))
         var result = ScanMesh()
+        result.positions.reserveCapacity(mesh.triangleCount * 3)
+        result.normals.reserveCapacity(mesh.triangleCount * 3)
+        result.uvs.reserveCapacity(mesh.triangleCount * 3)
+        result.indices.reserveCapacity(mesh.triangleCount * 3)
         for triangle in 0..<mesh.triangleCount {
             let column = triangle % grid
             let row = triangle / grid
-            let pad = 0.18 / Float(grid)
+            // Gutter is wide enough that a 1px dilate cannot bleed into the next chart, even at 80k faces.
+            let pad = 0.32 / Float(grid)
             let top = 1 - (Float(row) + pad) / Float(grid)
             let bottom = 1 - (Float(row + 1) - pad) / Float(grid)
             let corners = [
@@ -225,8 +295,10 @@ enum AtlasTexturer {
             let start = UInt32(result.positions.count)
             for corner in 0..<3 {
                 let index = Int(mesh.indices[triangle * 3 + corner])
-                guard index < mesh.positions.count else { continue }
-                result.positions.append(mesh.positions[index])
+                let position = index < mesh.positions.count ? mesh.positions[index] : .zero
+                let normal = index < mesh.normals.count ? mesh.normals[index] : SIMD3<Float>.zero
+                result.positions.append(position)
+                result.normals.append(normal)
                 result.uvs.append(corners[corner])
                 result.indices.append(start + UInt32(corner))
             }
@@ -263,7 +335,7 @@ enum AtlasTexturer {
             var bestFrame = -1
             var bestScore: Float = 0
             for (frameIndex, frame) in frames.enumerated() {
-                guard let score = scoreFace(points: points, centroid: centroid, normal: normal, frame: frame, buffer: frameIndex < buffers.count ? buffers[frameIndex] : nil, settings: settings, relaxed: false) else { continue }
+                guard let score = scoreFace(points: points, centroid: centroid, normal: normal, frame: frame, lidar: nil, settings: settings, relaxed: false) else { continue }
                 if score > bestScore {
                     bestScore = score
                     bestFrame = frameIndex
@@ -276,7 +348,7 @@ enum AtlasTexturer {
             }
             if bestFrame < 0 {
                 for (frameIndex, frame) in frames.enumerated() {
-                    guard let score = scoreFace(points: points, centroid: centroid, normal: normal, frame: frame, buffer: frameIndex < buffers.count ? buffers[frameIndex] : nil, settings: settings, relaxed: true) else { continue }
+                    guard let score = scoreFace(points: points, centroid: centroid, normal: normal, frame: frame, lidar: nil, settings: settings, relaxed: true) else { continue }
                     if score > bestScore {
                         bestScore = score
                         bestFrame = frameIndex
@@ -337,7 +409,7 @@ enum AtlasTexturer {
         centroid: SIMD3<Float>,
         normal: SIMD3<Float>,
         frame: StoredKeyframe,
-        buffer: MeshDepthImage?,
+        lidar: DepthImage?,
         settings: FusionSettings,
         relaxed: Bool
     ) -> Float? {
@@ -350,10 +422,12 @@ enum AtlasTexturer {
         let toward = frame.cameraPosition - centroid
         let distance = simd_length(toward)
         guard distance > 0.05 else { return nil }
-        let facing = simd_dot(simd_normalize(normal), toward / distance)
+        let length = simd_length(normal)
+        guard length > 1e-4 else { return nil }
+        let facing = simd_dot(normal / length, toward / distance)
         let minimumFacing: Float = relaxed ? 0.05 : 0.2
         guard facing > minimumFacing else { return nil }
-        if let buffer, buffer.occludes(pixel: centerPixel, depth: depth, frame: frame, slackScale: relaxed ? 2 : 1) { return nil }
+        if lidarOccludes(pixel: centerPixel, depth: depth, frame: frame, lidar: lidar, relaxed: relaxed) { return nil }
         var area: Float = 0
         var projected: [SIMD2<Float>] = []
         for point in points {
@@ -363,7 +437,7 @@ enum AtlasTexturer {
         if projected.count == 3 {
             area = abs((projected[1].x - projected[0].x) * (projected[2].y - projected[0].y) - (projected[2].x - projected[0].x) * (projected[1].y - projected[0].y)) * 0.5
         }
-        guard area > (relaxed ? 0.2 : 1.5) else { return nil }
+        guard area > 0.15 else { return nil }
         let sharpness = max(frame.blur, 1)
         return sharpness * sqrt(area) * facing / (0.35 + distance)
     }
@@ -413,8 +487,19 @@ enum AtlasTexturer {
                 color: color
             )
         }
-        image.dilate(passes: 8)
+        image.dilate(passes: 1)
         return image
+    }
+
+    /// LiDAR depth is in the same landscape frame as the photo. Reject a view only when something is clearly in front.
+    private static func lidarOccludes(pixel: SIMD2<Float>, depth: Float, frame: StoredKeyframe, lidar: DepthImage?, relaxed: Bool) -> Bool {
+        guard let lidar, lidar.width > 1, lidar.height > 1, frame.width > 1, frame.height > 1 else { return false }
+        let x = min(lidar.width - 1, max(0, Int(pixel.x * Float(lidar.width) / Float(frame.width))))
+        let y = min(lidar.height - 1, max(0, Int(pixel.y * Float(lidar.height) / Float(frame.height))))
+        let nearest = lidar.values[y * lidar.width + x]
+        guard nearest > 0.2 else { return false }
+        let slack = max(relaxed ? 0.45 : 0.25, depth * (relaxed ? 0.25 : 0.15))
+        return depth > nearest + slack
     }
 
     private static func paintTriangle(image: inout AtlasImage, world: [SIMD3<Float>], uv: [SIMD2<Float>], frame: StoredKeyframe, color: RGBAImage) {
@@ -457,58 +542,87 @@ enum AtlasTexturer {
         }
     }
 
+    /// Faces no photo could see take the color of the nearest similarly facing face, so the atlas has no white holes.
     private static func fillUncovered(mesh: ScanMesh, image: AtlasImage, chosen: [Int]) -> AtlasImage {
         var image = image
-        var averages = [SIMD3<Float>?](repeating: nil, count: mesh.triangleCount)
+        struct Painted {
+            var center: SIMD3<Float>
+            var normal: SIMD3<Float>
+            var color: SIMD3<Float>
+        }
+        var painted: [Painted] = []
+        var buckets: [SIMD3<Int32>: [Int]] = [:]
+        let cell: Float = 0.35
         for triangle in 0..<mesh.triangleCount where triangle < chosen.count && chosen[triangle] >= 0 {
             let ids = (0..<3).map { Int(mesh.indices[triangle * 3 + $0]) }
-            guard ids.allSatisfy({ $0 < mesh.uvs.count }) else { continue }
+            guard ids.allSatisfy({ $0 < mesh.positions.count && $0 < mesh.uvs.count }) else { continue }
             let uv = (mesh.uvs[ids[0]] + mesh.uvs[ids[1]] + mesh.uvs[ids[2]]) / 3
-            let x = Int(uv.x * Float(image.width - 1))
-            let y = Int((1 - uv.y) * Float(image.height - 1))
-            if let sample = image.get(x, y) { averages[triangle] = sample }
+            guard let color = image.sample(uv) else { continue }
+            let center = (mesh.positions[ids[0]] + mesh.positions[ids[1]] + mesh.positions[ids[2]]) / 3
+            let normal = faceNormal(ids.map { mesh.positions[$0] })
+            let key = SIMD3<Int32>(Int32(floor(center.x / cell)), Int32(floor(center.y / cell)), Int32(floor(center.z / cell)))
+            buckets[key, default: []].append(painted.count)
+            painted.append(Painted(center: center, normal: normal, color: color))
         }
-        let neighbors = faceNeighbors(mesh)
-        for _ in 0..<8 {
-            var next = averages
-            for triangle in 0..<mesh.triangleCount where averages[triangle] == nil {
-                var sum = SIMD3<Float>.zero
-                var count: Float = 0
-                for neighbor in neighbors[triangle] {
-                    if let color = averages[neighbor] {
-                        sum += color
-                        count += 1
+        guard !painted.isEmpty else { return image }
+        for triangle in 0..<mesh.triangleCount where triangle >= chosen.count || chosen[triangle] < 0 {
+            let ids = (0..<3).map { Int(mesh.indices[triangle * 3 + $0]) }
+            guard ids.allSatisfy({ $0 < mesh.positions.count && $0 < mesh.uvs.count }) else { continue }
+            let center = (mesh.positions[ids[0]] + mesh.positions[ids[1]] + mesh.positions[ids[2]]) / 3
+            let normal = faceNormal(ids.map { mesh.positions[$0] })
+            let origin = SIMD3<Int32>(Int32(floor(center.x / cell)), Int32(floor(center.y / cell)), Int32(floor(center.z / cell)))
+            var best: SIMD3<Float>?
+            var bestDistance = Float.greatestFiniteMagnitude
+            for z in -1...1 {
+                for y in -1...1 {
+                    for x in -1...1 {
+                        guard let hits = buckets[SIMD3(origin.x + Int32(x), origin.y + Int32(y), origin.z + Int32(z))] else { continue }
+                        for hit in hits {
+                            let candidate = painted[hit]
+                            guard simd_dot(candidate.normal, normal) > 0.7 else { continue }
+                            let distance = simd_distance(candidate.center, center)
+                            if distance < bestDistance {
+                                bestDistance = distance
+                                best = candidate.color
+                            }
+                        }
                     }
                 }
-                if count > 0 { next[triangle] = sum / count }
             }
-            averages = next
-        }
-        for triangle in 0..<mesh.triangleCount {
-            guard chosen[triangle] < 0, let color = averages[triangle] else { continue }
-            let ids = (0..<3).map { Int(mesh.indices[triangle * 3 + $0]) }
-            guard ids.allSatisfy({ $0 < mesh.uvs.count && $0 < mesh.positions.count }) else { continue }
+            guard let color = best, bestDistance < 0.45 else { continue }
             let pixels = ids.map { SIMD2(mesh.uvs[$0].x * Float(image.width - 1), (1 - mesh.uvs[$0].y) * Float(image.height - 1)) }
-            let minX = max(0, Int(floor(min(pixels[0].x, min(pixels[1].x, pixels[2].x)))))
-            let maxX = min(image.width - 1, Int(ceil(max(pixels[0].x, max(pixels[1].x, pixels[2].x)))))
-            let minY = max(0, Int(floor(min(pixels[0].y, min(pixels[1].y, pixels[2].y)))))
-            let maxY = min(image.height - 1, Int(ceil(max(pixels[0].y, max(pixels[1].y, pixels[2].y)))))
-            for y in minY...maxY {
-                for x in minX...maxX {
-                    if image.get(x, y) == nil { image.set(x, y, color) }
-                }
+            paintSolid(&image, pixels: pixels, color: color)
+        }
+        return image
+    }
+
+    private static func paintSolid(_ image: inout AtlasImage, pixels: [SIMD2<Float>], color: SIMD3<Float>) {
+        guard pixels.count == 3 else { return }
+        let minX = max(0, Int(floor(min(pixels[0].x, min(pixels[1].x, pixels[2].x)))))
+        let maxX = min(image.width - 1, Int(ceil(max(pixels[0].x, max(pixels[1].x, pixels[2].x)))))
+        let minY = max(0, Int(floor(min(pixels[0].y, min(pixels[1].y, pixels[2].y)))))
+        let maxY = min(image.height - 1, Int(ceil(max(pixels[0].y, max(pixels[1].y, pixels[2].y)))))
+        guard minX <= maxX, minY <= maxY else { return }
+        for y in minY...maxY {
+            for x in minX...maxX where image.get(x, y) == nil {
+                let p = SIMD2<Float>(Float(x) + 0.5, Float(y) + 0.5)
+                let w0 = edge(pixels[1], pixels[2], p)
+                let w1 = edge(pixels[2], pixels[0], p)
+                let w2 = edge(pixels[0], pixels[1], p)
+                let inside = (w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)
+                if inside { image.set(x, y, color) }
             }
         }
-        image.levelSeams(mesh: mesh)
-        return image
     }
 
     private static func paintVertexColors(_ mesh: inout ScanMesh, image: AtlasImage) {
         mesh.colors = Array(repeating: SIMD3(repeating: 0.72), count: mesh.positions.count)
-        for index in 0..<mesh.positions.count where index < mesh.uvs.count {
-            let x = Int(mesh.uvs[index].x * Float(image.width - 1))
-            let y = Int((1 - mesh.uvs[index].y) * Float(image.height - 1))
-            if let sample = image.get(x, y) { mesh.colors[index] = sample }
+        for triangle in 0..<mesh.triangleCount {
+            let ids = (0..<3).map { Int(mesh.indices[triangle * 3 + $0]) }
+            guard ids.allSatisfy({ $0 < mesh.uvs.count && $0 < mesh.colors.count }) else { continue }
+            let uv = (mesh.uvs[ids[0]] + mesh.uvs[ids[1]] + mesh.uvs[ids[2]]) / 3
+            guard let sample = image.sample(uv) ?? image.sampleNearby(uv) else { continue }
+            for id in ids { mesh.colors[id] = sample }
         }
     }
 
@@ -604,6 +718,26 @@ struct AtlasImage {
         rgba[pixel + 2] = UInt8(min(255, max(0, color.z * 255)).rounded())
         rgba[pixel + 3] = 255
         covered[index] = true
+    }
+
+    /// `uv.y == 1` is the top row of this image. SceneKit uses the same origin.
+    func sample(_ uv: SIMD2<Float>) -> SIMD3<Float>? {
+        let x = Int((uv.x * Float(width - 1)).rounded())
+        let y = Int(((1 - uv.y) * Float(height - 1)).rounded())
+        return get(x, y)
+    }
+
+    func sampleNearby(_ uv: SIMD2<Float>) -> SIMD3<Float>? {
+        let x = Int((uv.x * Float(width - 1)).rounded())
+        let y = Int(((1 - uv.y) * Float(height - 1)).rounded())
+        for radius in 1...3 {
+            for oy in -radius...radius {
+                for ox in -radius...radius {
+                    if let color = get(x + ox, y + oy) { return color }
+                }
+            }
+        }
+        return nil
     }
 
     func get(_ x: Int, _ y: Int) -> SIMD3<Float>? {
