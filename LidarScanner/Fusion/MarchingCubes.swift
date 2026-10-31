@@ -44,16 +44,20 @@ enum MarchingCubes {
                     for x in 0..<blockSize {
                         // The last cell in a block reads the next voxel, which may live in a neighbor block.
                         var sdf = [Float](repeating: 1, count: 8)
-                        var weight: Float = 0
                         var cube = 0
+                        var observed = true
                         for corner in 0..<8 {
                             let offset = corners[corner]
                             let sample = sample(baseX + x + offset.x, baseY + y + offset.y, baseZ + z + offset.z)
+                            if sample.1 < 0.15 {
+                                observed = false
+                                break
+                            }
                             sdf[corner] = sample.0
-                            weight += sample.1
                             if sample.0 < 0 { cube |= 1 << corner }
                         }
-                        guard weight > 0.15, cube != 0, cube != 255 else { continue }
+                        // Unobserved corners used to be treated as empty space, which meshed a second sheet behind every wall.
+                        guard observed, cube != 0, cube != 255 else { continue }
                         guard cube < MarchingCubesTables.edgeTable.count else { continue }
                         var edgeVertex = [Int](repeating: -1, count: 12)
                         let mask = MarchingCubesTables.edgeTable[cube]

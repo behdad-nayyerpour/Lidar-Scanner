@@ -18,7 +18,14 @@ enum MeshCoverage {
     static func fillingGaps(fused: ScanMesh, reference: ScanMesh, tolerance: Float) -> ScanMesh {
         guard !reference.positions.isEmpty else { return fused }
         guard !fused.positions.isEmpty else { return reference }
-        let index = PointIndex(points: fused.positions, cell: max(tolerance, 0.01))
+        var used: [SIMD3<Float>] = []
+        var seen = Set<Int>()
+        for index in fused.indices {
+            let vertex = Int(index)
+            guard vertex < fused.positions.count, seen.insert(vertex).inserted else { continue }
+            used.append(fused.positions[vertex])
+        }
+        let index = PointIndex(points: used, cell: max(tolerance, 0.01))
         var mesh = fused
         for triangle in 0..<reference.triangleCount {
             let i0 = Int(reference.indices[triangle * 3])
