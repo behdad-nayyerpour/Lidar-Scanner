@@ -412,6 +412,17 @@ struct ModelViewer: View {
                         library.startRefinement(id: scanID, settings: settings)
                     }
                 }
+                if record?.builtAvailable == true {
+                    if record?.showingBuilt == true {
+                        Button(L10n.viewerShowGray, systemImage: "cube") {
+                            try? library.showOriginalMesh(id: scanID)
+                        }
+                    } else {
+                        Button(L10n.viewerShowBuilt, systemImage: "cube.fill") {
+                            try? library.showBuiltMesh(id: scanID)
+                        }
+                    }
+                }
                 Button(L10n.viewerReset, systemImage: "viewfinder") { model.resetCamera() }
                 Button(L10n.viewerStats, systemImage: "info.circle") { showStats = true }
                 if library.paths(for: scanID).exists(library.paths(for: scanID).original) {
@@ -568,10 +579,11 @@ struct ModelViewer: View {
                     try MeshIO.read(from: meshURL)
                 }.value
                 var displayed = mesh
-                if let uvs = UVFile.read(from: paths.uvs, expected: mesh.positions.count) {
+                let textured = record?.showingBuilt == true
+                if textured, let uvs = UVFile.read(from: paths.uvs, expected: mesh.positions.count) {
                     displayed.uvs = uvs
                 }
-                let texture = UIImage(contentsOfFile: paths.texture.path)
+                let texture = textured ? UIImage(contentsOfFile: paths.texture.path) : nil
                 model.show(mesh: displayed, colored: record?.isColored == true, texture: texture)
             } catch {
                 model.errorText = error.localizedDescription

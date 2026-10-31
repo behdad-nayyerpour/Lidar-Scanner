@@ -47,9 +47,10 @@ enum TSDFFusion {
         objectCenter: SIMD3<Float>?,
         objectRadius: Float,
         signal: WorkSignal?,
-        progress: ((Double) -> Void)?
+        progress: ((Double) -> Void)?,
+        useMetal: Bool = true
     ) -> ScanMesh {
-        let volume = TSDFVolume(voxel: settings.voxelSize, truncation: settings.truncation)
+        let volume = TSDFVolume(voxel: settings.voxelSize, truncation: settings.truncation, useMetal: useMetal)
         let usable = frames.filter { $0.depthWidth > 1 && $0.depthHeight > 1 }
         guard !usable.isEmpty else { return ScanMesh() }
         for (index, frame) in usable.enumerated() {
@@ -76,13 +77,13 @@ private final class TSDFVolume {
     let voxel: Float
     let truncation: Float
     let blockSize = 8
-    let maxBlocks = 12_000
+    let maxBlocks = 20_000
     private var lookup: [BlockKey: Int] = [:]
     private var origins: [BlockKey] = []
     private var pointer: UnsafeMutablePointer<TSDFVoxel>
     private var metal: TSDFMetal?
 
-    init(voxel: Float, truncation: Float) {
+    init(voxel: Float, truncation: Float, useMetal: Bool) {
         self.voxel = voxel
         self.truncation = truncation
         let count = maxBlocks * 512
@@ -90,7 +91,7 @@ private final class TSDFVolume {
         for index in 0..<count {
             pointer[index] = TSDFVoxel(sdf: 1, weight: 0)
         }
-        metal = TSDFMetal(capacity: count)
+        metal = useMetal ? TSDFMetal(capacity: count) : nil
         if let metal {
             metal.reset(pointer, count: count)
         }
@@ -332,8 +333,12 @@ private final class TSDFMetal {
         command.commit()
         command.waitUntilCompleted()
         guard command.status == .completed else { return false }
-        let count = 12_000 * 512
-        voxels.assign(from: buffer.contents().bindMemory(to: TSDFVoxel.self, capacity: count), count: count)
+        let bytes = MemoryLayout<TSDFVoxel>.stride
+        for block in blocks {
+            let index = Int(block.index)
+            let source = buffer.contents().advanced(by: index * 512 * bytes).bindMemory(to: TSDFVoxel.self, capacity: 512)
+            voxels.advanced(by: index * 512).assign(from: source, count: 512)
+        }
         return true
     }
 

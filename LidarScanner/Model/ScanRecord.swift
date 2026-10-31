@@ -48,6 +48,8 @@ struct ScanRecord: Codable, Identifiable, Equatable {
     var isColored: Bool
     var hasKeyframes: Bool
     var qualityApplied: Bool
+    var builtAvailable: Bool
+    var showingBuilt: Bool
     var objectCenter: [Float]?
     var objectRadius: Float?
 
@@ -72,6 +74,8 @@ struct ScanRecord: Codable, Identifiable, Equatable {
         isColored: Bool = false,
         hasKeyframes: Bool = false,
         qualityApplied: Bool = false,
+        builtAvailable: Bool = false,
+        showingBuilt: Bool = false,
         objectCenter: [Float]? = nil,
         objectRadius: Float? = nil
     ) {
@@ -92,6 +96,8 @@ struct ScanRecord: Codable, Identifiable, Equatable {
         self.isColored = isColored
         self.hasKeyframes = hasKeyframes
         self.qualityApplied = qualityApplied
+        self.builtAvailable = builtAvailable
+        self.showingBuilt = showingBuilt
         self.objectCenter = objectCenter
         self.objectRadius = objectRadius
     }
@@ -109,7 +115,7 @@ struct ScanRecord: Codable, Identifiable, Equatable {
         case id, name, createdAt, updatedAt, mode, status
         case vertexCount, triangleCount, surfaceArea, boundsMin, boundsMax
         case isProcessed, reconstructionDetail, hasColorFrames, isColored
-        case hasKeyframes, qualityApplied, objectCenter, objectRadius
+        case hasKeyframes, qualityApplied, builtAvailable, showingBuilt, objectCenter, objectRadius
     }
 
     init(from decoder: Decoder) throws {
@@ -131,6 +137,8 @@ struct ScanRecord: Codable, Identifiable, Equatable {
         isColored = try container.decodeIfPresent(Bool.self, forKey: .isColored) ?? false
         hasKeyframes = try container.decodeIfPresent(Bool.self, forKey: .hasKeyframes) ?? false
         qualityApplied = try container.decodeIfPresent(Bool.self, forKey: .qualityApplied) ?? false
+        builtAvailable = try container.decodeIfPresent(Bool.self, forKey: .builtAvailable) ?? false
+        showingBuilt = try container.decodeIfPresent(Bool.self, forKey: .showingBuilt) ?? false
         objectCenter = try container.decodeIfPresent([Float].self, forKey: .objectCenter)
         objectRadius = try container.decodeIfPresent(Float.self, forKey: .objectRadius)
     }
@@ -154,6 +162,8 @@ struct ScanRecord: Codable, Identifiable, Equatable {
         try container.encode(isColored, forKey: .isColored)
         try container.encode(hasKeyframes, forKey: .hasKeyframes)
         try container.encode(qualityApplied, forKey: .qualityApplied)
+        try container.encode(builtAvailable, forKey: .builtAvailable)
+        try container.encode(showingBuilt, forKey: .showingBuilt)
         try container.encodeIfPresent(objectCenter, forKey: .objectCenter)
         try container.encodeIfPresent(objectRadius, forKey: .objectRadius)
     }
@@ -185,6 +195,7 @@ struct ScanPaths {
     var meta: URL { directory.appendingPathComponent("scan.json") }
     var mesh: URL { directory.appendingPathComponent("mesh.ply") }
     var original: URL { directory.appendingPathComponent("mesh.original.ply") }
+    var built: URL { directory.appendingPathComponent("mesh.built.ply") }
     var thumbnail: URL { directory.appendingPathComponent("thumbnail.png") }
     var preview: URL { directory.appendingPathComponent("preview.usdz") }
     var capture: URL { directory.appendingPathComponent("capture.usdz") }

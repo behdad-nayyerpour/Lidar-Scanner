@@ -15,9 +15,11 @@ struct FusionSettings: Codable, Equatable {
     var confidenceFloor: Float { Float(min(2, max(0, minConfidence))) }
 
     var estimate: String {
-        if !fuse { return L10n.qualityEstimateFast }
-        if voxelMillimeters <= 6 { return L10n.qualityEstimateHD }
-        return L10n.qualityEstimateBalanced
+        switch preset {
+        case "fast": return L10n.qualityEstimateFast
+        case "hd": return L10n.qualityEstimateHD
+        default: return L10n.qualityEstimateBalanced
+        }
     }
 
     static let fast = FusionSettings(
@@ -44,11 +46,11 @@ struct FusionSettings: Codable, Equatable {
 
     static let hd = FusionSettings(
         preset: "hd",
-        voxelMillimeters: 5,
+        voxelMillimeters: 10,
         maxRange: 3,
         minConfidence: 2,
-        smoothIterations: 6,
-        targetTriangles: 320_000,
+        smoothIterations: 4,
+        targetTriangles: 140_000,
         textureSize: 4096,
         fuse: true
     )
@@ -64,5 +66,19 @@ struct FusionSettings: Codable, Equatable {
             textureSize: textureSize,
             fuse: true
         )
+    }
+}
+
+enum FusionVoxel {
+    /// LiDAR depth is about 256×192, so a pixel at 2.5 m is roughly a centimeter. Voxels finer than that only invent streaks.
+    static func millimeters(requested: Float, frames: [StoredKeyframe]) -> Float {
+        var footprints: [Float] = []
+        for frame in frames where frame.depthWidth > 1, frame.fx > 1, frame.width > 1 {
+            let fxDepth = frame.fx * Float(frame.depthWidth) / Float(frame.width)
+            footprints.append(2.5 / fxDepth * 1000)
+        }
+        let sorted = footprints.sorted()
+        let footprint = sorted.isEmpty ? requested : sorted[sorted.count / 2]
+        return min(40, max(requested, footprint, 8))
     }
 }

@@ -415,7 +415,7 @@ final class ScanLibrary: ObservableObject {
         refineSignal = signal
         refineJob = ColorJob(scanID: id, progress: 0.02, message: settings.estimate)
         let paths = paths(for: id)
-        let meshURL = paths.mesh
+        let meshURL = paths.exists(paths.original) ? paths.original : paths.mesh
         let framesURL = paths.frames
         let center = record.objectCenter.flatMap { values -> SIMD3<Float>? in
             guard values.count == 3 else { return nil }
@@ -426,7 +426,7 @@ final class ScanLibrary: ObservableObject {
             let source = (try? MeshIO.read(from: meshURL)) ?? ScanMesh()
             let result = ScanProcessor.run(
                 directory: framesURL,
-                mesh: source,
+                reference: source,
                 settings: settings,
                 objectCenter: center,
                 objectRadius: radius,
@@ -451,7 +451,8 @@ final class ScanLibrary: ObservableObject {
                     ply: ply,
                     texture: jpeg,
                     thumbnail: thumbnail,
-                    cancelled: signal.isCancelled
+                    cancelled: signal.isCancelled,
+                    notice: result.notice
                 )
             }
         }
@@ -471,7 +472,8 @@ final class ScanLibrary: ObservableObject {
         ply: Data,
         texture: Data?,
         thumbnail: UIImage?,
-        cancelled: Bool
+        cancelled: Bool,
+        notice: String?
     ) {
         guard generation == refineGeneration, var record = record(id) else { return }
         if cancelled {
@@ -481,6 +483,7 @@ final class ScanLibrary: ObservableObject {
         }
         let paths = paths(for: id)
         do {
+            try ply.write(to: paths.built, options: .atomic)
             try ply.write(to: paths.mesh, options: .atomic)
             if mesh.uvs.count == mesh.positions.count {
                 try? UVFile.write(mesh.uvs, to: paths.uvs)
@@ -516,9 +519,43 @@ final class ScanLibrary: ObservableObject {
         record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
         record.qualityApplied = true
         record.isProcessed = true
+        record.builtAvailable = true
+        record.showingBuilt = true
         record.updatedAt = Date()
         try? write(record)
         refineJob = nil
+        if let notice {
+            colorNotice = notice
+        }
+    }
+
+    func showOriginalMesh(id: UUID) throws {
+        try activate(id: id, built: false)
+    }
+
+    func showBuiltMesh(id: UUID) throws {
+        try activate(id: id, built: true)
+    }
+
+    private func activate(id: UUID, built: Bool) throws {
+        guard var record = record(id) else { return }
+        let paths = paths(for: id)
+        let source = built ? paths.built : paths.original
+        guard paths.exists(source) else { return }
+        let data = try Data(contentsOf: source)
+        try data.write(to: paths.mesh, options: .atomic)
+        record.isColored = built && paths.exists(paths.texture)
+        if let mesh = try? MeshIO.read(from: paths.mesh) {
+            let bounds = mesh.boundingBox()
+            record.vertexCount = mesh.positions.count
+            record.triangleCount = mesh.triangleCount
+            record.surfaceArea = Double(mesh.surfaceArea())
+            record.boundsMin = [bounds.min.x, bounds.min.y, bounds.min.z]
+            record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
+        }
+        record.showingBuilt = built
+        record.updatedAt = Date()
+        try write(record)
     }
 
     func imageCount(id: UUID) -> Int {

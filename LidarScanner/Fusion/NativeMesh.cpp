@@ -46,7 +46,7 @@ int NMBuildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *i
     charts.maxIterations = 1;
     xatlas::PackOptions pack;
     pack.resolution = static_cast<uint32_t>(resolution > 0 ? resolution : 2048);
-    pack.padding = 2;
+    pack.padding = 4;
     pack.bilinear = true;
     pack.texelsPerUnit = 0;
     pack.bruteForce = false;

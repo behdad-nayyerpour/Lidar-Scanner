@@ -1,23 +1,36 @@
 import UIKit
 import simd
 
+struct BuildResult {
+    var mesh: ScanMesh
+    var texture: UIImage?
+    var notice: String?
+    var replacedGeometry: Bool
+}
+
 enum ScanProcessor {
     static func run(
         directory: URL,
-        mesh: ScanMesh,
-        settings: FusionSettings,
+        reference: ScanMesh,
+        settings input: FusionSettings,
         objectCenter: SIMD3<Float>?,
         objectRadius: Float,
         signal: WorkSignal?,
         progress: ((Double, String) -> Void)?
-    ) -> (mesh: ScanMesh, texture: UIImage?) {
+    ) -> BuildResult {
         progress?(0.02, L10n.qualityWorkingMesh)
         var frames: [StoredKeyframe] = []
         if let loaded = try? KeyframeArchive.readManifest(in: directory) {
             frames = loaded
         }
-        var working = mesh
+        var settings = input
+        var notice: String?
+        var working = reference
+        var replaced = false
         if settings.fuse, !frames.isEmpty {
+            let millimeters = FusionVoxel.millimeters(requested: settings.voxelMillimeters, frames: frames)
+            settings.voxelMillimeters = millimeters
+            Log.scan.info("fusion voxel mm=\(millimeters, privacy: .public) frames=\(frames.count, privacy: .public)")
             let fused = TSDFFusion.fuse(
                 directory: directory,
                 frames: frames,
@@ -26,22 +39,39 @@ enum ScanProcessor {
                 objectRadius: objectRadius,
                 signal: signal
             ) { fraction in
-                progress?(0.05 + 0.45 * fraction, L10n.qualityWorkingMesh)
+                progress?(0.04 + 0.40 * fraction, L10n.qualityWorkingMesh)
             }
-            if fused.triangleCount > 30 {
-                working = fused
+            let tolerance = max(0.04, settings.voxelSize * 4)
+            let coverage = MeshCoverage.fraction(of: reference, near: fused, tolerance: tolerance)
+            Log.scan.info("fusion coverage=\(coverage, privacy: .public) triangles=\(fused.triangleCount, privacy: .public)")
+            if fused.triangleCount < 30 || coverage < 0.55 {
+                notice = L10n.qualityFellBack
+                working = reference
+            } else {
+                working = fused.removingSmallComponents(minimumAreaFraction: 0.008)
+                let beforeFill = MeshCoverage.fraction(of: reference, near: working, tolerance: tolerance)
+                working = MeshCoverage.fillingGaps(fused: working, reference: reference, tolerance: tolerance)
+                if beforeFill < 0.92 {
+                    notice = L10n.qualityFilledGaps
+                }
+                replaced = true
             }
         }
-        if signal?.isCancelled == true { return (working, nil) }
-        progress?(0.52, L10n.qualityWorkingClean)
-        working = working.removingSmallComponents(minimumAreaFraction: 0.008)
-        if settings.smoothIterations > 0 {
-            working = working.taubinSmoothed(iterations: settings.smoothIterations)
+        if signal?.isCancelled == true {
+            return BuildResult(mesh: working, texture: nil, notice: nil, replacedGeometry: replaced)
         }
-        working = working.simplified(targetTriangles: settings.targetTriangles)
-        working.recomputeNormals()
-        if signal?.isCancelled == true || frames.isEmpty { return (working, nil) }
-        progress?(0.62, L10n.qualityWorkingTexture)
+        progress?(0.48, L10n.qualityWorkingClean)
+        if replaced {
+            if settings.smoothIterations > 0 {
+                working = working.taubinSmoothed(iterations: settings.smoothIterations)
+            }
+            working = working.simplified(targetTriangles: settings.targetTriangles)
+            working.recomputeNormals()
+        }
+        if signal?.isCancelled == true || frames.isEmpty {
+            return BuildResult(mesh: working, texture: nil, notice: notice, replacedGeometry: replaced)
+        }
+        progress?(0.55, L10n.qualityWorkingTexture)
         guard let textured = AtlasTexturer.texture(
             mesh: working,
             directory: directory,
@@ -49,12 +79,12 @@ enum ScanProcessor {
             settings: settings,
             signal: signal,
             progress: { fraction in
-                progress?(0.62 + 0.36 * fraction, L10n.qualityWorkingTexture)
+                progress?(0.55 + 0.43 * fraction, L10n.qualityWorkingTexture)
             }
         ) else {
-            return (working, nil)
+            return BuildResult(mesh: working, texture: nil, notice: notice, replacedGeometry: replaced)
         }
-        return (textured.mesh, textured.image)
+        return BuildResult(mesh: textured.mesh, texture: textured.image, notice: notice, replacedGeometry: replaced)
     }
 }
 

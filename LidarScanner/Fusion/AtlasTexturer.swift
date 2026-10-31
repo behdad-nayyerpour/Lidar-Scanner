@@ -17,10 +17,14 @@ enum AtlasTexturer {
         var mesh = unwrap(source, resolution: settings.textureSize)
         guard mesh.uvs.count == mesh.positions.count, mesh.triangleCount > 0 else { return nil }
         mesh.recomputeNormals()
-        progress?(0.2)
-        let chosen = selectViews(mesh: mesh, directory: directory, frames: frames, settings: settings, signal: signal)
-        progress?(0.45)
-        guard var atlas = rasterize(mesh: mesh, directory: directory, frames: frames, chosen: chosen, settings: settings, signal: signal) else {
+        progress?(0.15)
+        let chosen = selectViews(mesh: mesh, directory: directory, frames: frames, settings: settings, signal: signal) { fraction in
+            progress?(0.15 + 0.35 * fraction)
+        }
+        progress?(0.55)
+        guard var atlas = rasterize(mesh: mesh, directory: directory, frames: frames, chosen: chosen, settings: settings, signal: signal, progress: { fraction in
+            progress?(0.7 + 0.25 * fraction)
+        }) else {
             return nil
         }
         atlas = fillUncovered(mesh: mesh, image: atlas, chosen: chosen)
@@ -101,7 +105,8 @@ enum AtlasTexturer {
         directory: URL,
         frames: [StoredKeyframe],
         settings: FusionSettings,
-        signal: WorkSignal?
+        signal: WorkSignal?,
+        progress: ((Double) -> Void)? = nil
     ) -> [Int] {
         var buffers: [MeshDepthImage] = []
         buffers.reserveCapacity(frames.count)
@@ -112,7 +117,10 @@ enum AtlasTexturer {
         var chosen = [Int](repeating: -1, count: mesh.triangleCount)
         var top: [[(Int, Float)]] = Array(repeating: [], count: mesh.triangleCount)
         for triangle in 0..<mesh.triangleCount {
-            if signal?.isCancelled == true { break }
+            if triangle & 2047 == 0 {
+                if signal?.isCancelled == true { break }
+                progress?(Double(triangle) / Double(max(mesh.triangleCount, 1)))
+            }
             let ids = (0..<3).map { Int(mesh.indices[triangle * 3 + $0]) }
             guard ids.allSatisfy({ $0 < mesh.positions.count }) else { continue }
             let points = ids.map { mesh.positions[$0] }
@@ -143,8 +151,9 @@ enum AtlasTexturer {
             }
             chosen[triangle] = bestFrame
         }
+        chosen = voteByRegion(mesh: mesh, chosen: chosen, top: top, cell: 0.3)
         let neighbors = faceNeighbors(mesh)
-        for _ in 0..<2 {
+        for _ in 0..<6 {
             var next = chosen
             for triangle in 0..<mesh.triangleCount {
                 var counts: [Int: Int] = [:]
@@ -154,11 +163,39 @@ enum AtlasTexturer {
                 guard let popular = counts.max(by: { $0.value < $1.value }), popular.value >= 2 else { continue }
                 let own = top[triangle].first { $0.0 == chosen[triangle] }?.1 ?? 0
                 let alternative = top[triangle].first { $0.0 == popular.key }?.1 ?? 0
-                if alternative > own * 0.55 { next[triangle] = popular.key }
+                if alternative > own * 0.3 { next[triangle] = popular.key }
             }
             chosen = next
         }
         return chosen
+    }
+
+    /// Faces in the same patch of the room share one photo, so the atlas is not a confetti of single triangles.
+    private static func voteByRegion(mesh: ScanMesh, chosen: [Int], top: [[(Int, Float)]], cell: Float) -> [Int] {
+        var buckets: [SIMD3<Int32>: [Int]] = [:]
+        for triangle in 0..<mesh.triangleCount where triangle < chosen.count && chosen[triangle] >= 0 {
+            let i0 = Int(mesh.indices[triangle * 3])
+            let i1 = Int(mesh.indices[triangle * 3 + 1])
+            let i2 = Int(mesh.indices[triangle * 3 + 2])
+            guard i0 < mesh.positions.count, i1 < mesh.positions.count, i2 < mesh.positions.count else { continue }
+            let center = (mesh.positions[i0] + mesh.positions[i1] + mesh.positions[i2]) / 3
+            let key = SIMD3<Int32>(Int32(floor(center.x / cell)), Int32(floor(center.y / cell)), Int32(floor(center.z / cell)))
+            buckets[key, default: []].append(triangle)
+        }
+        var result = chosen
+        for triangles in buckets.values {
+            var counts: [Int: Int] = [:]
+            for triangle in triangles {
+                counts[chosen[triangle], default: 0] += 1
+            }
+            guard let popular = counts.max(by: { $0.value < $1.value }) else { continue }
+            for triangle in triangles {
+                let own = top[triangle].first { $0.0 == chosen[triangle] }?.1 ?? 0
+                let alternative = top[triangle].first { $0.0 == popular.key }?.1 ?? 0
+                if alternative > own * 0.2 { result[triangle] = popular.key }
+            }
+        }
+        return result
     }
 
     private static func scoreFace(
@@ -203,7 +240,8 @@ enum AtlasTexturer {
         frames: [StoredKeyframe],
         chosen: [Int],
         settings: FusionSettings,
-        signal: WorkSignal?
+        signal: WorkSignal?,
+        progress: ((Double) -> Void)? = nil
     ) -> AtlasImage? {
         let size = max(256, settings.textureSize)
         var image = AtlasImage(width: size, height: size)
@@ -225,6 +263,9 @@ enum AtlasTexturer {
             cache[frameIndex] = color
         }
         for triangle in 0..<mesh.triangleCount {
+            if triangle & 4095 == 0 {
+                progress?(Double(triangle) / Double(max(mesh.triangleCount, 1)))
+            }
             let frameIndex = triangle < chosen.count ? chosen[triangle] : -1
             guard frameIndex >= 0, let color = cache[frameIndex] else { continue }
             let frame = frames[frameIndex]
@@ -238,7 +279,7 @@ enum AtlasTexturer {
                 color: color
             )
         }
-        image.dilate(passes: 4)
+        image.dilate(passes: 8)
         return image
     }
 

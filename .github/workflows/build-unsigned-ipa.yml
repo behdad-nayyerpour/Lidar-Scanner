@@ -36,6 +36,9 @@ jobs:
       - name: Install XcodeGen
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
 
+      - name: Fusion and projection self-test
+        run: bash scripts/run-fusion-tests.sh
+
       - name: Generate project, build, and package unsigned IPA
         run: bash scripts/build-unsigned-ipa.sh
 

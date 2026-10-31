@@ -275,7 +275,11 @@
 "quality.custom" = "Custom";
 "quality.fast.detail" = "Texture the live mesh. Quickest.";
 "quality.balanced.detail" = "10 mm fusion, 2K texture.";
-"quality.hd.detail" = "5 mm fusion, 4K texture.";
+"quality.hd.detail" = "Fusion no finer than the depth sensor, 4K texture.";
+"quality.fellBack" = "Depth fusion did not cover the original scan, so this build kept that mesh and textured it.";
+"quality.filledGaps" = "Surfaces the depth fusion missed were kept from the original mesh.";
+"viewer.showGray" = "Show original mesh";
+"viewer.showBuilt" = "Show built mesh";
 "quality.voxel" = "Voxel size";
 "quality.smooth" = "Smoothing";
 "quality.triangles" = "Target triangles";

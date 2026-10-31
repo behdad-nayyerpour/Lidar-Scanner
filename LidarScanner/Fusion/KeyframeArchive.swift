@@ -22,10 +22,11 @@ struct StoredKeyframe: Codable, Equatable {
     var blur: Float
 
     var viewMatrix: simd_float4x4 { Self.matrix(view) }
-    var cameraToWorld: simd_float4x4 { Self.matrix(transform) }
+    /// Inverse of the landscapeRight view matrix. `transform` is the device-orientation pose and is not the inverse of that view when the phone is portrait, so geometry must not use it.
+    var cameraToWorld: simd_float4x4 { simd_inverse(viewMatrix) }
     var cameraPosition: SIMD3<Float> {
-        guard camera.count == 3 else { return .zero }
-        return SIMD3(camera[0], camera[1], camera[2])
+        let column = cameraToWorld.columns.3
+        return SIMD3(column.x, column.y, column.z)
     }
 
     static func matrix(_ values: [Float]) -> simd_float4x4 {

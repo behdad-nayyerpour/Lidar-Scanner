@@ -292,7 +292,11 @@ enum L10n {
     static var qualityCustom: String { tr("quality.custom", "Custom") }
     static var qualityFastDetail: String { tr("quality.fast.detail", "Texture the live mesh. Quickest.") }
     static var qualityBalancedDetail: String { tr("quality.balanced.detail", "10 mm fusion, 2K texture.") }
-    static var qualityHDDetail: String { tr("quality.hd.detail", "5 mm fusion, 4K texture.") }
+    static var qualityHDDetail: String { tr("quality.hd.detail", "Fusion no finer than the depth sensor, 4K texture.") }
+    static var qualityFellBack: String { tr("quality.fellBack", "Depth fusion did not cover the original scan, so this build kept that mesh and textured it.") }
+    static var qualityFilledGaps: String { tr("quality.filledGaps", "Surfaces the depth fusion missed were kept from the original mesh.") }
+    static var viewerShowGray: String { tr("viewer.showGray", "Show original mesh") }
+    static var viewerShowBuilt: String { tr("viewer.showBuilt", "Show built mesh") }
     static var qualityVoxel: String { tr("quality.voxel", "Voxel size") }
     static var qualitySmooth: String { tr("quality.smooth", "Smoothing") }
     static var qualityTriangles: String { tr("quality.triangles", "Target triangles") }

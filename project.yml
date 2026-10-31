@@ -69,11 +69,34 @@ targets:
         DEVELOPMENT_TEAM: ""
         PROVISIONING_PROFILE_SPECIFIER: ""
 
+  LidarScannerTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: LidarScannerTests
+    dependencies:
+      - target: LidarScanner
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.lidarscanner.tests
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+
 schemes:
   LidarScanner:
     build:
       targets:
         LidarScanner: all
+    test:
+      config: Debug
+      targets:
+        - LidarScannerTests
     run:
       config: Debug
     archive:
