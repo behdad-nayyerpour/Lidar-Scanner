@@ -10,7 +10,9 @@ final class TextureCorrectnessTests: XCTestCase {
         var image = RGBAImage(rgba: [UInt8](repeating: 0, count: 8 * 6 * 4), width: 8, height: 6, exposureScale: 1)
         for x in 0..<8 {
             image.rgba[(0 * 8 + x) * 4] = 255
+            image.rgba[(0 * 8 + x) * 4 + 3] = 255
             image.rgba[(5 * 8 + x) * 4 + 1] = 255
+            image.rgba[(5 * 8 + x) * 4 + 3] = 255
         }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

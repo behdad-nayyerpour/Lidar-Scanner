@@ -149,9 +149,7 @@ enum KeyframeArchive {
             space: colorSpace,
             bitmapInfo: info.rawValue
         ) else { return nil }
-        // Bitmap memory starts at the bottom. Flip so row 0 stays the top of the photo, matching camera v.
-        context.translateBy(x: 0, y: CGFloat(height))
-        context.scaleBy(x: 1, y: -1)
+        // Row 0 of this buffer is the top of the JPEG, which is camera v = 0. Do not flip it.
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
         let scaleX = Float(width) / Float(frame.width)
         let scaleY = Float(height) / Float(frame.height)
