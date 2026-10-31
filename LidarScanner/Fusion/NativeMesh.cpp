@@ -26,7 +26,7 @@ int NMBuildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *i
     memset(outMesh, 0, sizeof(NMMesh));
     xatlas::Atlas *atlas = xatlas::Create();
     if (atlas == nullptr) { return 2; }
-    xatlas::SetProgressCallback(atlas, atlasProgress, cancelFlag);
+    xatlas::SetProgressCallback(atlas, atlasProgress, const_cast<int *>(cancelFlag));
 
     xatlas::MeshDecl decl;
     decl.vertexCount = vertexCount;
