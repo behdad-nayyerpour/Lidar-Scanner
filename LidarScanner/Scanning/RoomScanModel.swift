@@ -45,6 +45,9 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
     let sceneView = ARSCNView(frame: .zero)
     private let library: ScanLibrary
     private let keyframes = KeyframeBuffer()
+    private let recorder = KeyframeRecorder()
+    private var coveredAnchors = Set<UUID>()
+    private var lookedUp = false
     private var configuration = ARWorldTrackingConfiguration()
     private var sphereNode: SCNNode?
     private var lastPosition: SIMD3<Float>?
@@ -70,6 +73,11 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
     @Published var alertMessage: String?
     @Published var savedID: UUID?
     @Published var overlayStyle: ScanOverlayStyle
+    @Published var highResolution = true
+    @Published var maxRange: Float = 3
+    @Published var depthConfidence = 2
+    @Published var movingTooFast = false
+    @Published var showCeilingHint = false
 
     private var objectCenter: SIMD3<Float>?
     private var finishSignal: WorkSignal?
@@ -100,6 +108,8 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         if !isRecording {
             return ScanGuidance(message: mode == .objectLidar ? L10n.scanGuidanceObject : L10n.scanGuidanceReady, tone: .info)
         }
+        if movingTooFast || speed > 0.7 { return ScanGuidance(message: L10n.scanGuidanceFast, tone: .warn) }
+        if showCeilingHint { return ScanGuidance(message: L10n.scanGuidanceCeiling, tone: .info) }
         if speed > 0.55 { return ScanGuidance(message: L10n.scanGuidanceSlow, tone: .warn) }
         if ambient < 280 { return ScanGuidance(message: L10n.scanGuidanceLight, tone: .warn) }
         if surfaceArea < 0.25, let startedAt, Date().timeIntervalSince(startedAt) > 6 {
@@ -132,6 +142,7 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         }
         isRecording = true
         keyframes.setAccepting(true)
+        recorder.setAccepting(true)
         if mode == .objectLidar, objectCenter == nil {
             setCenterFromCrosshair()
         }
@@ -142,18 +153,27 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         sceneView.session.pause()
         isPaused = true
         keyframes.setAccepting(false)
+        recorder.setAccepting(false)
         speed = 0
     }
 
     func resume() {
         sceneView.session.run(configuration, options: [])
         isPaused = false
-        if isRecording { keyframes.setAccepting(true) }
+        if isRecording {
+            keyframes.setAccepting(true)
+            recorder.setAccepting(true)
+        }
         lastTimestamp = nil
     }
 
     func restart() {
         keyframes.removeAll()
+        recorder.reset()
+        coveredAnchors.removeAll()
+        lookedUp = false
+        movingTooFast = false
+        showCeilingHint = false
         isRecording = false
         isPaused = false
         startedAt = nil
@@ -178,7 +198,10 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         let signal = WorkSignal()
         finishSignal = signal
         keyframes.setAccepting(false)
+        recorder.setAccepting(false)
         let mode = self.mode
+        let center = self.objectCenter
+        let radius = self.objectRadius
         Task { @MainActor [weak self] in
             guard let self else { return }
             let name = self.library.defaultName(for: mode)
@@ -197,7 +220,7 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
                 self.colorProgress = 0.2
                 Log.scan.info("extract vertices=\(extracted.positions.count, privacy: .public) triangles=\(extracted.triangleCount, privacy: .public) frames=\(frames.count, privacy: .public) ms=\(ScanTiming.milliseconds(since: started), privacy: .public)")
                 DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                    self?.saveGeometry(extracted, frames: frames, mode: mode, name: name, root: root, signal: signal, started: started)
+                    self?.saveGeometry(extracted, frames: frames, mode: mode, name: name, root: root, signal: signal, started: started, objectCenter: center, objectRadius: radius)
                 }
             }
         }
@@ -223,7 +246,9 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         name: String,
         root: URL,
         signal: WorkSignal,
-        started: CFAbsoluteTime
+        started: CFAbsoluteTime,
+        objectCenter: SIMD3<Float>?,
+        objectRadius: Float
     ) {
         if signal.isCancelled {
             DispatchQueue.main.async { [weak self] in self?.finishCancelled() }
@@ -252,7 +277,16 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
             self?.processingText = L10n.scanProcessingSave
         }
         do {
-            let saved = try GeometryArchive.save(mesh: mesh, frames: frames, mode: mode, name: name, root: root)
+            let saved = try GeometryArchive.save(
+                mesh: mesh,
+                frames: frames,
+                mode: mode,
+                name: name,
+                root: root,
+                keyframeDirectory: recorder.handoff(),
+                objectCenter: objectCenter,
+                objectRadius: mode == .objectLidar ? objectRadius : 0
+            )
             Log.scan.info("finish total ms=\(ScanTiming.milliseconds(since: started), privacy: .public)")
             let previewURL = ScanPaths(directory: root.appendingPathComponent(saved.record.id.uuidString, isDirectory: true)).preview
             DispatchQueue.global(qos: .utility).async {
@@ -335,6 +369,7 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
 
     func stop() {
         keyframes.setAccepting(false)
+        recorder.setAccepting(false)
         sceneView.session.pause()
     }
 
@@ -367,6 +402,19 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         }
         lastPosition = position
         lastTimestamp = timestamp
+        movingTooFast = speed > 0.7 || recorder.consumeTooFast()
+        if let frame = sceneView.session.currentFrame {
+            let forward = SIMD3<Float>(-frame.camera.transform.columns.2.x, -frame.camera.transform.columns.2.y, -frame.camera.transform.columns.2.z)
+            if forward.y > 0.45 { lookedUp = true }
+            if isRecording, !movingTooFast {
+                markCovered(from: frame, forward: forward)
+            }
+        }
+        if isRecording, let startedAt, Date().timeIntervalSince(startedAt) > 12, !lookedUp, mode == .room {
+            showCeilingHint = true
+        } else {
+            showCeilingHint = false
+        }
         if timestamp - lastAreaUpdate > 0.8 {
             lastAreaUpdate = timestamp
             refreshCoverage()
@@ -424,13 +472,26 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         guard let meshAnchor = anchor as? ARMeshAnchor else { return }
-        node.addChildNode(LiveMeshBuilder.node(for: meshAnchor, style: overlayStyle))
+        node.addChildNode(LiveMeshBuilder.node(for: meshAnchor, style: overlayStyle, covered: coveredAnchors.contains(meshAnchor.identifier)))
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let meshAnchor = anchor as? ARMeshAnchor else { return }
         node.childNodes.filter { $0.name == "mesh" }.forEach { $0.removeFromParentNode() }
-        node.addChildNode(LiveMeshBuilder.node(for: meshAnchor, style: overlayStyle))
+        node.addChildNode(LiveMeshBuilder.node(for: meshAnchor, style: overlayStyle, covered: coveredAnchors.contains(meshAnchor.identifier)))
+    }
+
+    private func markCovered(from frame: ARFrame, forward: SIMD3<Float>) {
+        let origin = SIMD3<Float>(frame.camera.transform.columns.3.x, frame.camera.transform.columns.3.y, frame.camera.transform.columns.3.z)
+        for case let anchor as ARMeshAnchor in frame.anchors {
+            let center = SIMD3<Float>(anchor.transform.columns.3.x, anchor.transform.columns.3.y, anchor.transform.columns.3.z)
+            let to = center - origin
+            let distance = simd_length(to)
+            guard distance > 0.2, distance < maxRange else { continue }
+            if simd_dot(to / distance, forward) > 0.72 {
+                coveredAnchors.insert(anchor.identifier)
+            }
+        }
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -440,6 +501,9 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         let timestamp = frame.timestamp
         let position = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         keyframes.consider(frame)
+        if isRecording, !isPaused {
+            recorder.consider(frame, maxRange: maxRange)
+        }
         DispatchQueue.main.async { [weak self] in
             self?.ingest(position: position, light: light, tracking: tracking, timestamp: timestamp)
         }
@@ -566,7 +630,7 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
 
 enum LiveMeshBuilder {
     /// Fill plus wireframe share one triangle index buffer. Line mode draws the edges on the GPU, so the overlay does not build a second edge list.
-    static func node(for anchor: ARMeshAnchor, style: ScanOverlayStyle) -> SCNNode {
+    static func node(for anchor: ARMeshAnchor, style: ScanOverlayStyle, covered: Bool) -> SCNNode {
         let geometry = anchor.geometry
         let vertices = geometry.vertices
         let normals = geometry.normals
@@ -640,7 +704,9 @@ enum LiveMeshBuilder {
             let fillGeometry = SCNGeometry(sources: sources, elements: [fillElement])
             let fillMaterial = SCNMaterial()
             fillMaterial.lightingModel = .constant
-            fillMaterial.diffuse.contents = SurfaceClass.uiColor(raw: raw)
+            fillMaterial.diffuse.contents = covered
+                ? SurfaceClass.uiColor(raw: raw)
+                : UIColor(red: 0.95, green: 0.58, blue: 0.18, alpha: 1)
             fillMaterial.transparency = 0.34
             fillMaterial.isDoubleSided = true
             fillMaterial.writesToDepthBuffer = true

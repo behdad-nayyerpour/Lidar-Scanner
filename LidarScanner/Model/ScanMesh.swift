@@ -7,6 +7,7 @@ struct ScanMesh: Sendable {
     var colors: [SIMD3<Float>] = []
     var indices: [UInt32] = []
     var faceClasses: [UInt8] = []
+    var uvs: [SIMD2<Float>] = []
 
     var triangleCount: Int { indices.count / 3 }
     var isEmpty: Bool { triangleCount == 0 || positions.isEmpty }
@@ -37,6 +38,20 @@ struct ScanMesh: Sendable {
             area += simd_length(simd_cross(edgeA, edgeB)) * 0.5
         }
         return area
+    }
+
+    /// Volume of a closed mesh, from the divergence theorem. Open scans return a useful approximate enclosed volume.
+    func enclosedVolume() -> Float {
+        guard triangleCount > 0 else { return 0 }
+        var total: Float = 0
+        for triangle in 0..<triangleCount {
+            let i0 = Int(indices[triangle * 3])
+            let i1 = Int(indices[triangle * 3 + 1])
+            let i2 = Int(indices[triangle * 3 + 2])
+            guard i0 < positions.count, i1 < positions.count, i2 < positions.count else { continue }
+            total += simd_dot(positions[i0], simd_cross(positions[i1], positions[i2]))
+        }
+        return abs(total) / 6
     }
 
     mutating func recomputeNormals() {

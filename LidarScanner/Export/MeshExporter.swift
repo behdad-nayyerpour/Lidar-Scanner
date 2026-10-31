@@ -116,8 +116,17 @@ enum MeshExporter {
         return data
     }
 
-    static func objPackage(mesh: ScanMesh, baseName: String) throws -> Data {
+    static func objPackage(mesh: ScanMesh, baseName: String, atlas: UIImage? = nil) throws -> Data {
         let safe = FileNames.safe(baseName)
+        if let atlas, mesh.uvs.count == mesh.positions.count, let jpeg = atlas.jpegData(compressionQuality: 0.9) {
+            let obj = objText(positions: mesh.positions, normals: mesh.normals, uvs: mesh.uvs, colors: nil, indices: mesh.indices, material: "\(safe).mtl")
+            let mtl = "newmtl scan\nKa 1 1 1\nKd 1 1 1\nKs 0 0 0\nillum 1\nd 1\nmap_Kd \(safe).jpg\n"
+            return try ZipWriter.store(files: [
+                ("\(safe).obj", Data(obj.utf8)),
+                ("\(safe).mtl", Data(mtl.utf8)),
+                ("\(safe).jpg", jpeg)
+            ])
+        }
         if let baked = TextureBaker.bake(mesh), let png = baked.pngData() {
             let obj = objText(positions: baked.positions, normals: baked.normals, uvs: baked.uvs, colors: nil, indices: baked.indices, material: "\(safe).mtl")
             let mtl = "newmtl scan\nKa 1 1 1\nKd 1 1 1\nKs 0 0 0\nillum 1\nd 1\nmap_Kd \(safe).png\n"
@@ -138,7 +147,17 @@ enum MeshExporter {
         return try ZipWriter.store(files: [("\(safe).obj", Data(obj.utf8))])
     }
 
-    static func glbData(mesh: ScanMesh) throws -> Data {
+    static func glbData(mesh: ScanMesh, atlas: UIImage? = nil) throws -> Data {
+        if let atlas, mesh.uvs.count == mesh.positions.count, let png = atlas.pngData() {
+            return try GLBPacker.pack(
+                positions: mesh.positions,
+                normals: mesh.normals.count == mesh.positions.count ? mesh.normals : [SIMD3<Float>](repeating: SIMD3(0, 1, 0), count: mesh.positions.count),
+                uvs: mesh.uvs.map { SIMD2($0.x, 1 - $0.y) },
+                colors: nil,
+                indices: mesh.indices,
+                png: png
+            )
+        }
         if let baked = TextureBaker.bake(mesh), let png = baked.pngData() {
             let flipped = baked.uvs.map { SIMD2<Float>($0.x, 1 - $0.y) }
             return try GLBPacker.pack(
@@ -160,6 +179,18 @@ enum MeshExporter {
         )
     }
 
+    static func usdzTextured(mesh: ScanMesh, image: UIImage, to url: URL) throws {
+        guard let geometry = mesh.texturedGeometry(image: image) else {
+            try usdz(mesh: mesh, baked: nil, to: url, allowBake: false)
+            return
+        }
+        let scene = SCNScene()
+        scene.rootNode.addChildNode(SCNNode(geometry: geometry))
+        guard scene.write(to: url, options: nil, delegate: nil, progressHandler: nil) else {
+            throw ScanError.exportFailed(L10n.exportFailed)
+        }
+    }
+
     static func usdz(mesh: ScanMesh, baked: BakedTexture? = nil, to url: URL, allowBake: Bool = true) throws {
         let texture = baked ?? (allowBake ? TextureBaker.bake(mesh) : nil)
         if let texture, let geometry = texture.makeTexturedGeometry() {
@@ -172,13 +203,30 @@ enum MeshExporter {
         try writeVertexColorUSDZ(mesh: mesh, to: url)
     }
 
-    static func allFormatsZip(mesh: ScanMesh, baseName: String, includeOriginalUSDZ: URL?) throws -> Data {
+    static func allFormatsZip(mesh: ScanMesh, baseName: String, includeOriginalUSDZ: URL?, atlas: UIImage? = nil) throws -> Data {
         let safe = FileNames.safe(baseName)
         var files: [(String, Data)] = []
         files.append(("\(safe).ply", plyData(mesh: mesh)))
         files.append(("\(safe).stl", stlData(mesh: mesh, millimeters: true, zUp: true)))
         files.append(("\(safe).dxf", dxfData(mesh: mesh, millimeters: true, zUp: true)))
-        files.append(("\(safe).glb", try glbData(mesh: mesh)))
+        files.append(("\(safe).glb", try glbData(mesh: mesh, atlas: atlas)))
+        if let atlas, mesh.uvs.count == mesh.positions.count, let jpeg = atlas.jpegData(compressionQuality: 0.9) {
+            let obj = objText(positions: mesh.positions, normals: mesh.normals, uvs: mesh.uvs, colors: nil, indices: mesh.indices, material: "\(safe).mtl")
+            let mtl = "newmtl scan\nKa 1 1 1\nKd 1 1 1\nKs 0 0 0\nillum 1\nd 1\nmap_Kd \(safe).jpg\n"
+            files.append(("\(safe).obj", Data(obj.utf8)))
+            files.append(("\(safe).mtl", Data(mtl.utf8)))
+            files.append(("\(safe).jpg", jpeg))
+            let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("usdz")
+            try? usdzTextured(mesh: mesh, image: atlas, to: temp)
+            if let usdzData = try? Data(contentsOf: temp) {
+                files.append(("\(safe).usdz", usdzData))
+            }
+            try? FileManager.default.removeItem(at: temp)
+            if let includeOriginalUSDZ, let data = try? Data(contentsOf: includeOriginalUSDZ) {
+                files.append(("\(safe)-original.usdz", data))
+            }
+            return try ZipWriter.store(files: files)
+        }
         if let baked = TextureBaker.bake(mesh), let png = baked.pngData() {
             let obj = objText(positions: baked.positions, normals: baked.normals, uvs: baked.uvs, colors: nil, indices: baked.indices, material: "\(safe).mtl")
             let mtl = "newmtl scan\nKa 1 1 1\nKd 1 1 1\nKs 0 0 0\nillum 1\nd 1\nmap_Kd \(safe).png\n"

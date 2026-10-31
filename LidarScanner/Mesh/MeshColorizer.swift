@@ -217,14 +217,15 @@ private struct MeshDepthBuffer {
 
     /// Same projection as `ColorKeyframe.sample`: ARKit looks down -Z, image Y follows the intrinsics.
     private static func project(_ world: SIMD3<Float>, frame: ColorKeyframe, scaleX: Float, scaleY: Float) -> SIMD3<Float>? {
-        let cameraSpace = frame.viewMatrix * SIMD4<Float>(world.x, world.y, world.z, 1)
-        guard cameraSpace.z < -0.05 else { return nil }
-        let inverseDepth = -1 / cameraSpace.z
-        let x = cameraSpace.x * inverseDepth
-        let y = cameraSpace.y * inverseDepth
-        let u = frame.intrinsics.columns.0.x * x + frame.intrinsics.columns.2.x
-        let v = frame.intrinsics.columns.1.y * y + frame.intrinsics.columns.2.y
-        guard u >= 0, v >= 0, u < Float(frame.width), v < Float(frame.height) else { return nil }
-        return SIMD3(u * scaleX, v * scaleY, -cameraSpace.z)
+        guard let hit = CameraProjection.pixel(
+            world: world,
+            viewMatrix: frame.viewMatrix,
+            fx: frame.intrinsics.columns.0.x,
+            fy: frame.intrinsics.columns.1.y,
+            cx: frame.intrinsics.columns.2.x,
+            cy: frame.intrinsics.columns.2.y
+        ) else { return nil }
+        guard hit.pixel.x >= 0, hit.pixel.y >= 0, hit.pixel.x < Float(frame.width), hit.pixel.y < Float(frame.height) else { return nil }
+        return SIMD3(hit.pixel.x * scaleX, hit.pixel.y * scaleY, hit.depth)
     }
 }

@@ -37,10 +37,13 @@ final class ViewerModel: NSObject, ObservableObject, SCNSceneRendererDelegate {
     private var lastLabelUpdate: TimeInterval = 0
     var onMeasurementsChange: (([StoredMeasurement]) -> Void)?
 
-    func show(mesh: ScanMesh, colored: Bool) {
+    var textureImage: UIImage?
+
+    func show(mesh: ScanMesh, colored: Bool, texture: UIImage? = nil) {
         self.mesh = mesh
-        meshIsColored = colored
-        if colored { shaded = false }
+        textureImage = texture
+        meshIsColored = colored || texture != nil
+        if colored || texture != nil { shaded = false }
         usingUSDZ = false
         triangleCount = mesh.triangleCount
         vertexCount = mesh.positions.count
@@ -120,6 +123,18 @@ final class ViewerModel: NSObject, ObservableObject, SCNSceneRendererDelegate {
 
     private func scene(for mesh: ScanMesh) -> SCNScene {
         let scene = SCNScene()
+        if let textureImage, mesh.uvs.count == mesh.positions.count, let geometry = mesh.texturedGeometry(image: textureImage), !showClasses {
+            let node = SCNNode(geometry: geometry)
+            node.name = "scanMesh"
+            if wireframe {
+                let lines = mesh.makeGeometry(mode: .vertex, lit: false, wireframe: true, solidColor: wireColor)
+                let wire = SCNNode(geometry: lines)
+                wire.renderingOrder = 10
+                node.addChildNode(wire)
+            }
+            scene.rootNode.addChildNode(node)
+            return scene
+        }
         let mode: ViewerColorMode = showClasses ? .classification : .vertex
         let solid = (!meshIsColored && mode == .vertex) ? uncoloredColor : nil
         let surface = mesh.makeGeometry(
@@ -256,6 +271,8 @@ struct ModelViewer: View {
     @State private var showQuickLook = false
     @State private var showAppearance = false
     @State private var showStats = false
+    @State private var showQuality = false
+    @State private var offeredQuality = false
     @State private var confirmRevert = false
     @State private var renameText = ""
     @State private var renaming = false
@@ -314,12 +331,14 @@ struct ModelViewer: View {
         .onChange(of: model.shaded) { _, _ in model.rebuildAppearance() }
         .onChange(of: model.showClasses) { _, _ in model.rebuildAppearance() }
         .onChange(of: model.wireframe) { _, _ in model.rebuildAppearance() }
-        .onChange(of: library.record(scanID)?.isColored) { _, colored in
-            if colored == true {
-                Task { await load() }
-            }
+        .onChange(of: library.record(scanID)?.updatedAt) { _, _ in
+            Task { await load() }
         }
         .onAppear {
+            if !offeredQuality, library.record(scanID)?.hasKeyframes == true, library.record(scanID)?.qualityApplied != true {
+                offeredQuality = true
+                showQuality = true
+            }
             model.measurements = library.measurements(id: scanID)
             model.onMeasurementsChange = { measurements in
                 try? library.saveMeasurements(id: scanID, measurements)
@@ -340,6 +359,11 @@ struct ModelViewer: View {
         }
         .sheet(isPresented: $showAppearance) {
             ViewerAppearanceSheet(model: model)
+        }
+        .sheet(isPresented: $showQuality) {
+            QualitySheet { settings in
+                library.startRefinement(id: scanID, settings: settings)
+            }
         }
         .sheet(isPresented: $showStats) { statsSheet }
         .alert(L10n.libraryRename, isPresented: $renaming) {
@@ -380,6 +404,14 @@ struct ModelViewer: View {
                 Toggle(L10n.viewerClasses, isOn: $model.showClasses)
                 Toggle(L10n.viewerWire, isOn: $model.wireframe)
                 Button(L10n.viewerAppearance, systemImage: "paintpalette") { showAppearance = true }
+                if record?.hasKeyframes == true {
+                    Button(L10n.qualityRefine, systemImage: "square.stack.3d.up") { showQuality = true }
+                    Button(L10n.qualityRetexture, systemImage: "paintbrush.pointed") {
+                        var settings = FusionSettings.fast
+                        settings.maxRange = 5
+                        library.startRefinement(id: scanID, settings: settings)
+                    }
+                }
                 Button(L10n.viewerReset, systemImage: "viewfinder") { model.resetCamera() }
                 Button(L10n.viewerStats, systemImage: "info.circle") { showStats = true }
                 if library.paths(for: scanID).exists(library.paths(for: scanID).original) {
@@ -407,6 +439,21 @@ struct ModelViewer: View {
                 }
                 ProgressView(value: job.progress).tint(AppColor.accent)
                 Button(L10n.colorCancel) { library.cancelAddingColor() }
+                    .font(.subheadline.weight(.semibold))
+            }
+            .padding(12)
+            .background(AppColor.surface)
+        } else if let job = library.refineJob, job.scanID == scanID {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(job.message).font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text("\(Int((job.progress * 100).rounded()))%")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(AppColor.textSecondary)
+                }
+                ProgressView(value: job.progress).tint(AppColor.accent)
+                Button(L10n.colorCancel) { library.cancelRefinement() }
                     .font(.subheadline.weight(.semibold))
             }
             .padding(12)
@@ -489,7 +536,9 @@ struct ModelViewer: View {
                 LabeledContent(L10n.statVertices, value: model.vertexCount.formatted())
                 LabeledContent(L10n.statTriangles, value: model.triangleCount.formatted())
                 LabeledContent(L10n.processResultSize, value: (MeasurementUnit(rawValue: UserDefaults.standard.string(forKey: "measurementUnit") ?? "") ?? .meters).formatSize(model.boundsSize))
+                LabeledContent(L10n.statSize, value: (MeasurementUnit(rawValue: UserDefaults.standard.string(forKey: "measurementUnit") ?? "") ?? .meters).formatSize(model.boundsSize))
                 LabeledContent(L10n.statArea, value: (MeasurementUnit(rawValue: UserDefaults.standard.string(forKey: "measurementUnit") ?? "") ?? .meters).formatArea(model.area))
+                LabeledContent(L10n.statVolume, value: (MeasurementUnit(rawValue: UserDefaults.standard.string(forKey: "measurementUnit") ?? "") ?? .meters).formatVolume(model.currentMesh?.enclosedVolume() ?? 0))
             }
             .navigationTitle(L10n.viewerStats)
             .navigationBarTitleDisplayMode(.inline)
@@ -518,7 +567,12 @@ struct ModelViewer: View {
                 let mesh = try await Task.detached(priority: .userInitiated) {
                     try MeshIO.read(from: meshURL)
                 }.value
-                model.show(mesh: mesh, colored: record?.isColored == true)
+                var displayed = mesh
+                if let uvs = UVFile.read(from: paths.uvs, expected: mesh.positions.count) {
+                    displayed.uvs = uvs
+                }
+                let texture = UIImage(contentsOfFile: paths.texture.path)
+                model.show(mesh: displayed, colored: record?.isColored == true, texture: texture)
             } catch {
                 model.errorText = error.localizedDescription
                 model.isLoading = false
@@ -729,6 +783,9 @@ struct ExportSheet: View {
                     exportRow(L10n.exportOriginalUSDZ, L10n.exportOriginalDetail) { try await exportOriginal() }
                 }
                 exportRow(L10n.exportAll, L10n.exportAllDetail) { try await exportAll() }
+                if library.paths(for: scanID).exists(library.paths(for: scanID).frames) {
+                    exportRow(L10n.exportAllData, L10n.exportAllDataDetail) { try await exportFrames() }
+                }
                 if let errorText {
                     Text(errorText).foregroundStyle(AppColor.danger)
                 }
@@ -781,11 +838,23 @@ struct ExportSheet: View {
     }
 
     private func loadMesh() async throws -> ScanMesh {
-        if let mesh = try library.loadMesh(id: scanID) { return mesh }
         let paths = library.paths(for: scanID)
-        let source = paths.exists(paths.capture) ? paths.capture : paths.preview
-        guard paths.exists(source) else { throw ScanError.fileMissing }
-        return try USDZExtractor.extract(from: source)
+        var mesh: ScanMesh
+        if let loaded = try library.loadMesh(id: scanID) {
+            mesh = loaded
+        } else {
+            let source = paths.exists(paths.capture) ? paths.capture : paths.preview
+            guard paths.exists(source) else { throw ScanError.fileMissing }
+            mesh = try USDZExtractor.extract(from: source)
+        }
+        if let uvs = UVFile.read(from: paths.uvs, expected: mesh.positions.count) {
+            mesh.uvs = uvs
+        }
+        return mesh
+    }
+
+    private func atlasImage() -> UIImage? {
+        UIImage(contentsOfFile: library.paths(for: scanID).texture.path)
     }
 
     private func stage(_ name: String, _ data: Data) throws -> SharePayload {
@@ -807,7 +876,7 @@ struct ExportSheet: View {
 
     private func exportOBJ() async throws {
         let mesh = try await loadMesh()
-        share = try stage("\(baseName())-obj.zip", try MeshExporter.objPackage(mesh: mesh, baseName: baseName()))
+        share = try stage("\(baseName())-obj.zip", try MeshExporter.objPackage(mesh: mesh, baseName: baseName(), atlas: atlasImage()))
     }
 
     private func exportSTL() async throws {
@@ -850,7 +919,7 @@ struct ExportSheet: View {
 
     private func exportGLB() async throws {
         let mesh = try await loadMesh()
-        share = try stage("\(baseName()).glb", try MeshExporter.glbData(mesh: mesh))
+        share = try stage("\(baseName()).glb", try MeshExporter.glbData(mesh: mesh, atlas: atlasImage()))
     }
 
     private func exportAll() async throws {
@@ -859,9 +928,15 @@ struct ExportSheet: View {
         let data = try MeshExporter.allFormatsZip(
             mesh: mesh,
             baseName: baseName(),
-            includeOriginalUSDZ: library.paths(for: scanID).exists(original) ? original : nil
+            includeOriginalUSDZ: library.paths(for: scanID).exists(original) ? original : nil,
+            atlas: atlasImage()
         )
         share = try stage("\(baseName())-all.zip", data)
+    }
+
+    private func exportFrames() async throws {
+        let directory = library.paths(for: scanID).frames
+        share = try stage("\(baseName())-all-data.zip", try KeyframeArchive.allDataZip(in: directory))
     }
 }
 

@@ -149,6 +149,26 @@ extension ScanMesh {
     }
 }
 
+extension ScanMesh {
+    func texturedGeometry(image: UIImage) -> SCNGeometry? {
+        guard uvs.count == positions.count, !indices.isEmpty else { return nil }
+        let normals = self.normals.count == positions.count ? self.normals : [SIMD3<Float>](repeating: SIMD3(0, 1, 0), count: positions.count)
+        let sources = [
+            SCNGeometrySource(data: Packed.float3Data(positions), semantic: .vertex, vectorCount: positions.count, usesFloatComponents: true, componentsPerVector: 3, bytesPerComponent: 4, dataOffset: 0, dataStride: 12),
+            SCNGeometrySource(data: Packed.float3Data(normals), semantic: .normal, vectorCount: normals.count, usesFloatComponents: true, componentsPerVector: 3, bytesPerComponent: 4, dataOffset: 0, dataStride: 12),
+            SCNGeometrySource(data: Packed.float2Data(uvs), semantic: .texcoord, vectorCount: uvs.count, usesFloatComponents: true, componentsPerVector: 2, bytesPerComponent: 4, dataOffset: 0, dataStride: 8)
+        ]
+        let element = SCNGeometryElement(data: Packed.indexData(indices), primitiveType: .triangles, primitiveCount: indices.count / 3, bytesPerIndex: 4)
+        let geometry = SCNGeometry(sources: sources, elements: [element])
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = image
+        material.isDoubleSided = true
+        geometry.materials = [material]
+        return geometry
+    }
+}
+
 extension BakedTexture {
     func makeTexturedGeometry() -> SCNGeometry? {
         guard let image = cgImage() else { return nil }

@@ -8,10 +8,13 @@ final class ScanLibrary: ObservableObject {
     @Published private(set) var records: [ScanRecord] = []
     @Published private(set) var thumbnails: [UUID: UIImage] = [:]
     @Published var colorJob: ColorJob?
+    @Published var refineJob: ColorJob?
     @Published var colorNotice: String?
 
     private var colorSignal = WorkSignal()
     private var colorGeneration = 0
+    private var refineSignal = WorkSignal()
+    private var refineGeneration = 0
 
     let root: URL
     private let fileManager = FileManager.default
@@ -66,6 +69,9 @@ final class ScanLibrary: ObservableObject {
     func delete(_ id: UUID) throws {
         if colorJob?.scanID == id {
             cancelAddingColor(notify: false)
+        }
+        if refineJob?.scanID == id {
+            cancelRefinement(notify: false)
         }
         let directory = paths(for: id).directory
         if fileManager.fileExists(atPath: directory.path) {
@@ -173,6 +179,8 @@ final class ScanLibrary: ObservableObject {
         }
         let ply = MeshIO.encode(mesh)
         try ply.write(to: paths.mesh, options: .atomic)
+        try? fileManager.removeItem(at: paths.uvs)
+        try? fileManager.removeItem(at: paths.texture)
         try? MeshExporter.usdz(mesh: mesh, baked: TextureBaker.bake(mesh), to: paths.preview)
         if let image = ThumbnailRenderer.image(mesh: mesh) {
             try? image.pngData()?.write(to: paths.thumbnail, options: .atomic)
@@ -393,6 +401,126 @@ final class ScanLibrary: ObservableObject {
         }
     }
 
+    func startRefinement(id: UUID, settings: FusionSettings) {
+        guard refineJob == nil else {
+            colorNotice = L10n.colorBusy
+            return
+        }
+        guard let record = record(id), record.hasKeyframes else {
+            colorNotice = L10n.qualityNeedsFrames
+            return
+        }
+        let generation = refineGeneration
+        let signal = WorkSignal()
+        refineSignal = signal
+        refineJob = ColorJob(scanID: id, progress: 0.02, message: settings.estimate)
+        let paths = paths(for: id)
+        let meshURL = paths.mesh
+        let framesURL = paths.frames
+        let center = record.objectCenter.flatMap { values -> SIMD3<Float>? in
+            guard values.count == 3 else { return nil }
+            return SIMD3(values[0], values[1], values[2])
+        }
+        let radius = record.objectRadius ?? 0
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let source = (try? MeshIO.read(from: meshURL)) ?? ScanMesh()
+            let result = ScanProcessor.run(
+                directory: framesURL,
+                mesh: source,
+                settings: settings,
+                objectCenter: center,
+                objectRadius: radius,
+                signal: signal
+            ) { fraction, message in
+                Task { @MainActor [weak self] in
+                    guard let self, generation == self.refineGeneration else { return }
+                    self.refineJob?.progress = fraction
+                    self.refineJob?.message = message
+                }
+            }
+            let ply = MeshIO.encode(result.mesh)
+            let jpeg = result.texture?.jpegData(compressionQuality: 0.86)
+            let thumbnail = result.texture == nil
+                ? ThumbnailRenderer.image(mesh: result.mesh, solidColor: UIColor(red: 0.78, green: 0.64, blue: 0.50, alpha: 1))
+                : ThumbnailRenderer.image(mesh: result.mesh)
+            Task { @MainActor [weak self] in
+                self?.commitRefinement(
+                    id: id,
+                    generation: generation,
+                    mesh: result.mesh,
+                    ply: ply,
+                    texture: jpeg,
+                    thumbnail: thumbnail,
+                    cancelled: signal.isCancelled
+                )
+            }
+        }
+    }
+
+    func cancelRefinement(notify: Bool = true) {
+        refineSignal.cancel()
+        refineGeneration += 1
+        refineJob = nil
+        if notify { colorNotice = L10n.colorCancelled }
+    }
+
+    private func commitRefinement(
+        id: UUID,
+        generation: Int,
+        mesh: ScanMesh,
+        ply: Data,
+        texture: Data?,
+        thumbnail: UIImage?,
+        cancelled: Bool
+    ) {
+        guard generation == refineGeneration, var record = record(id) else { return }
+        if cancelled {
+            refineJob = nil
+            colorNotice = L10n.colorCancelled
+            return
+        }
+        let paths = paths(for: id)
+        do {
+            try ply.write(to: paths.mesh, options: .atomic)
+            if mesh.uvs.count == mesh.positions.count {
+                try? UVFile.write(mesh.uvs, to: paths.uvs)
+            }
+            if let texture {
+                try? texture.write(to: paths.texture, options: .atomic)
+                record.isColored = true
+            }
+            if let png = thumbnail?.pngData() {
+                try? png.write(to: paths.thumbnail, options: .atomic)
+                thumbnails[id] = thumbnail
+            }
+            let preview = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("usdz")
+            if let texture, let image = UIImage(data: texture) {
+                try? MeshExporter.usdzTextured(mesh: mesh, image: image, to: preview)
+            } else {
+                try? MeshExporter.usdz(mesh: mesh, baked: nil, to: preview, allowBake: false)
+            }
+            if FileManager.default.fileExists(atPath: preview.path) {
+                if paths.exists(paths.preview) { try? fileManager.removeItem(at: paths.preview) }
+                try? fileManager.moveItem(at: preview, to: paths.preview)
+            }
+        } catch {
+            refineJob = nil
+            colorNotice = L10n.colorFailed
+            return
+        }
+        let bounds = mesh.boundingBox()
+        record.vertexCount = mesh.positions.count
+        record.triangleCount = mesh.triangleCount
+        record.surfaceArea = Double(mesh.surfaceArea())
+        record.boundsMin = [bounds.min.x, bounds.min.y, bounds.min.z]
+        record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
+        record.qualityApplied = true
+        record.isProcessed = true
+        record.updatedAt = Date()
+        try? write(record)
+        refineJob = nil
+    }
+
     func imageCount(id: UUID) -> Int {
         let folder = paths(for: id).images
         let files = (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
@@ -425,7 +553,10 @@ enum GeometryArchive {
         frames: [ColorKeyframe],
         mode: ScanMode,
         name: String,
-        root: URL
+        root: URL,
+        keyframeDirectory: URL?,
+        objectCenter: SIMD3<Float>?,
+        objectRadius: Float
     ) throws -> (record: ScanRecord, thumbnail: UIImage?) {
         let started = CFAbsoluteTimeGetCurrent()
         let id = UUID()
@@ -449,6 +580,14 @@ enum GeometryArchive {
         if let data = thumbnail?.pngData() {
             try? data.write(to: paths.thumbnail, options: .atomic)
         }
+        var storedKeyframes = false
+        if let keyframeDirectory, FileManager.default.fileExists(atPath: KeyframeArchive.manifestURL(in: keyframeDirectory).path) {
+            if FileManager.default.fileExists(atPath: paths.frames.path) {
+                try? FileManager.default.removeItem(at: paths.frames)
+            }
+            try? FileManager.default.moveItem(at: keyframeDirectory, to: paths.frames)
+            storedKeyframes = FileManager.default.fileExists(atPath: KeyframeArchive.manifestURL(in: paths.frames).path)
+        }
         let now = Date()
         let bounds = mesh.boundingBox()
         let record = ScanRecord(
@@ -465,7 +604,11 @@ enum GeometryArchive {
             boundsMax: [bounds.max.x, bounds.max.y, bounds.max.z],
             isProcessed: false,
             hasColorFrames: storedFrames,
-            isColored: false
+            isColored: false,
+            hasKeyframes: storedKeyframes,
+            qualityApplied: false,
+            objectCenter: objectCenter.map { [$0.x, $0.y, $0.z] },
+            objectRadius: objectRadius > 0 ? objectRadius : nil
         )
         let meta = try JSONCoding.encoder.encode(record)
         try meta.write(to: paths.meta, options: .atomic)

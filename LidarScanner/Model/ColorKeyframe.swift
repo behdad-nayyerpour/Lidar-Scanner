@@ -52,13 +52,18 @@ struct ColorKeyframe: Sendable {
     /// Returns a score and a color when the vertex faces this camera and projects inside the frame.
     func sample(world: SIMD3<Float>, normal: SIMD3<Float>) -> (Float, SIMD3<Float>)? {
         let cameraSpace = viewMatrix * SIMD4<Float>(world.x, world.y, world.z, 1)
-        // ARKit cameras look down -Z. Points in front have a negative camera-space Z.
-        guard cameraSpace.z < -0.05 else { return nil }
-        let inverseDepth = -1 / cameraSpace.z
-        let x = cameraSpace.x * inverseDepth
-        let y = cameraSpace.y * inverseDepth
-        let u = intrinsics.columns.0.x * x + intrinsics.columns.2.x
-        let v = intrinsics.columns.1.y * y + intrinsics.columns.2.y
+        // Image +v is down and camera +Y is up, so CameraProjection negates Y.
+        guard let projected = CameraProjection.pixel(
+            cameraX: cameraSpace.x,
+            cameraY: cameraSpace.y,
+            cameraZ: cameraSpace.z,
+            fx: intrinsics.columns.0.x,
+            fy: intrinsics.columns.1.y,
+            cx: intrinsics.columns.2.x,
+            cy: intrinsics.columns.2.y
+        ) else { return nil }
+        let u = projected.x
+        let v = projected.y
         guard u >= 1, v >= 1, u < Float(width) - 1, v < Float(height) - 1 else { return nil }
 
         let towardCamera = cameraPosition - world
@@ -97,13 +102,9 @@ struct ColorKeyframe: Sendable {
 
     /// Visibility of a point from this camera, without a surface normal. Used to pick a few candidate frames per region.
     func coverageScore(world: SIMD3<Float>) -> Float? {
-        let cameraSpace = viewMatrix * SIMD4<Float>(world.x, world.y, world.z, 1)
-        guard cameraSpace.z < -0.05 else { return nil }
-        let inverseDepth = -1 / cameraSpace.z
-        let x = cameraSpace.x * inverseDepth
-        let y = cameraSpace.y * inverseDepth
-        let u = intrinsics.columns.0.x * x + intrinsics.columns.2.x
-        let v = intrinsics.columns.1.y * y + intrinsics.columns.2.y
+        guard let projected = CameraProjection.pixel(world: world, viewMatrix: viewMatrix, fx: intrinsics.columns.0.x, fy: intrinsics.columns.1.y, cx: intrinsics.columns.2.x, cy: intrinsics.columns.2.y) else { return nil }
+        let u = projected.pixel.x
+        let v = projected.pixel.y
         guard u >= 1, v >= 1, u < Float(width) - 1, v < Float(height) - 1 else { return nil }
         let distance = simd_distance(cameraPosition, world)
         guard distance > 0.05, distance < 8 else { return nil }

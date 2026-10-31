@@ -113,6 +113,47 @@ extension ScanMesh {
         ).compacted()
     }
 
+    func taubinSmoothed(iterations: Int) -> ScanMesh {
+        var mesh = self
+        let steps = min(12, max(0, iterations))
+        for _ in 0..<steps {
+            mesh = mesh.smoothed(iterations: 1, lambda: 0.45)
+            mesh = mesh.smoothed(iterations: 1, lambda: -0.48)
+        }
+        mesh.recomputeNormals()
+        return mesh
+    }
+
+    func simplified(targetTriangles: Int) -> ScanMesh {
+        guard targetTriangles > 50, triangleCount > targetTriangles + 20 else { return self }
+        var packed: [Float] = []
+        packed.reserveCapacity(positions.count * 3)
+        for position in positions {
+            packed.append(position.x)
+            packed.append(position.y)
+            packed.append(position.z)
+        }
+        var native = NMMesh()
+        let code: Int32 = packed.withUnsafeBufferPointer { positions in
+            indices.withUnsafeBufferPointer { indices in
+                NMSimplify(positions.baseAddress, UInt32(self.positions.count), indices.baseAddress, UInt32(self.indices.count), UInt32(targetTriangles * 3), &native)
+            }
+        }
+        defer { NMFreeMesh(&native) }
+        guard code == 0, native.vertexCount > 0, native.indexCount >= 3, let positions = native.positions, let indices = native.indices else {
+            return decimated(targetRatio: Float(targetTriangles) / Float(max(triangleCount, 1)))
+        }
+        var mesh = ScanMesh()
+        for index in 0..<Int(native.vertexCount) {
+            mesh.positions.append(SIMD3(positions[index * 3], positions[index * 3 + 1], positions[index * 3 + 2]))
+        }
+        for index in 0..<Int(native.indexCount) {
+            mesh.indices.append(indices[index])
+        }
+        mesh.recomputeNormals()
+        return mesh.compacted()
+    }
+
     func smoothed(iterations: Int, lambda: Float) -> ScanMesh {
         let steps = min(12, max(0, iterations))
         guard steps > 0, positions.count > 2 else { return self }

@@ -46,8 +46,13 @@ struct ScanRecord: Codable, Identifiable, Equatable {
     var reconstructionDetail: String?
     var hasColorFrames: Bool
     var isColored: Bool
+    var hasKeyframes: Bool
+    var qualityApplied: Bool
+    var objectCenter: [Float]?
+    var objectRadius: Float?
 
     var canAddColor: Bool { hasColorFrames && !isColored }
+    var canRefine: Bool { hasKeyframes }
 
     init(
         id: UUID,
@@ -64,7 +69,11 @@ struct ScanRecord: Codable, Identifiable, Equatable {
         isProcessed: Bool,
         reconstructionDetail: String? = nil,
         hasColorFrames: Bool = false,
-        isColored: Bool = false
+        isColored: Bool = false,
+        hasKeyframes: Bool = false,
+        qualityApplied: Bool = false,
+        objectCenter: [Float]? = nil,
+        objectRadius: Float? = nil
     ) {
         self.id = id
         self.name = name
@@ -81,6 +90,10 @@ struct ScanRecord: Codable, Identifiable, Equatable {
         self.reconstructionDetail = reconstructionDetail
         self.hasColorFrames = hasColorFrames
         self.isColored = isColored
+        self.hasKeyframes = hasKeyframes
+        self.qualityApplied = qualityApplied
+        self.objectCenter = objectCenter
+        self.objectRadius = objectRadius
     }
 
     var boundsSize: SIMD3<Float> {
@@ -96,6 +109,7 @@ struct ScanRecord: Codable, Identifiable, Equatable {
         case id, name, createdAt, updatedAt, mode, status
         case vertexCount, triangleCount, surfaceArea, boundsMin, boundsMax
         case isProcessed, reconstructionDetail, hasColorFrames, isColored
+        case hasKeyframes, qualityApplied, objectCenter, objectRadius
     }
 
     init(from decoder: Decoder) throws {
@@ -115,6 +129,10 @@ struct ScanRecord: Codable, Identifiable, Equatable {
         reconstructionDetail = try container.decodeIfPresent(String.self, forKey: .reconstructionDetail)
         hasColorFrames = try container.decodeIfPresent(Bool.self, forKey: .hasColorFrames) ?? false
         isColored = try container.decodeIfPresent(Bool.self, forKey: .isColored) ?? false
+        hasKeyframes = try container.decodeIfPresent(Bool.self, forKey: .hasKeyframes) ?? false
+        qualityApplied = try container.decodeIfPresent(Bool.self, forKey: .qualityApplied) ?? false
+        objectCenter = try container.decodeIfPresent([Float].self, forKey: .objectCenter)
+        objectRadius = try container.decodeIfPresent(Float.self, forKey: .objectRadius)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -134,6 +152,10 @@ struct ScanRecord: Codable, Identifiable, Equatable {
         try container.encodeIfPresent(reconstructionDetail, forKey: .reconstructionDetail)
         try container.encode(hasColorFrames, forKey: .hasColorFrames)
         try container.encode(isColored, forKey: .isColored)
+        try container.encode(hasKeyframes, forKey: .hasKeyframes)
+        try container.encode(qualityApplied, forKey: .qualityApplied)
+        try container.encodeIfPresent(objectCenter, forKey: .objectCenter)
+        try container.encodeIfPresent(objectRadius, forKey: .objectRadius)
     }
 }
 
@@ -168,6 +190,9 @@ struct ScanPaths {
     var capture: URL { directory.appendingPathComponent("capture.usdz") }
     var measurements: URL { directory.appendingPathComponent("measurements.json") }
     var colorFrames: URL { directory.appendingPathComponent("colorframes.bin") }
+    var frames: URL { directory.appendingPathComponent("Frames", isDirectory: true) }
+    var texture: URL { directory.appendingPathComponent("texture.jpg") }
+    var uvs: URL { directory.appendingPathComponent("uvs.bin") }
     var images: URL { directory.appendingPathComponent("Images", isDirectory: true) }
 
     func exists(_ url: URL) -> Bool {

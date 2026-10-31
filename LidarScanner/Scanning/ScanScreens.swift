@@ -75,6 +75,12 @@ struct RoomScanScreen: View {
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
+        .onChange(of: model.maxRange) { _, value in
+            UserDefaults.standard.set(value, forKey: "scanMaxRange")
+        }
+        .onChange(of: model.depthConfidence) { _, value in
+            UserDefaults.standard.set(value, forKey: "scanConfidence")
+        }
         .onChange(of: model.savedID) { _, newValue in
             if let newValue {
                 onFinished(newValue)
@@ -128,6 +134,9 @@ struct RoomScanScreen: View {
                 systemImage: model.guidance.tone == .good ? "checkmark" : "info.circle",
                 tone: model.guidance.tone
             )
+            if model.highResolution {
+                highResControls
+            }
             if model.mode == .objectLidar {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -228,6 +237,26 @@ struct RoomScanScreen: View {
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(0.35))
+    }
+
+    private var highResControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(L10n.scanHighRes).font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(String(format: "%.1f m", model.maxRange)).font(.caption.monospacedDigit())
+            }
+            .foregroundStyle(.white)
+            Slider(value: $model.maxRange, in: 0.3...5).tint(AppColor.accent)
+            Picker(L10n.scanConfidence, selection: $model.depthConfidence) {
+                Text(L10n.confidenceLow).tag(0)
+                Text(L10n.confidenceMed).tag(1)
+                Text(L10n.confidenceHigh).tag(2)
+            }
+            .pickerStyle(.segmented)
+        }
+        .padding(12)
+        .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var overlayControl: some View {

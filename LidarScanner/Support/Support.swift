@@ -136,6 +136,15 @@ enum MeasurementUnit: String, CaseIterable, Identifiable {
         }
     }
 
+    func formatVolume(_ cubicMeters: Float) -> String {
+        switch self {
+        case .meters, .centimeters:
+            return String(format: "%.3f m³", cubicMeters)
+        case .feet, .inches:
+            return String(format: "%.2f ft³", cubicMeters * 35.3146667)
+        }
+    }
+
     func formatArea(_ squareMeters: Float) -> String {
         switch self {
         case .meters, .centimeters:

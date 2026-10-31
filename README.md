@@ -12,13 +12,13 @@ Bundle identifier: `com.example.lidarscanner` (change it in `project.yml` before
 
 - Scan a room with ARKit scene reconstruction. Covered surfaces show a triangle wireframe and a semi-transparent color fill over the camera. A control switches that to fill only or hides it.
 - Guidance while you scan: pace, light, tracking, and how much surface area has been meshed. Start, pause, resume, restart, and finish.
-- Finish saves the geometry immediately. Camera frames are stored with the scan (up to 24 images, plus a LiDAR depth map when the phone provides one). Add Color, from the viewer or the library, paints vertex color in the background with progress and cancel.
+- Finish saves the gray mesh immediately, and stores sharp keyframes (RGB, depth, confidence, pose, intrinsics) for a later build. Fast / Balanced / HD / Custom fuses that depth (Balanced and HD) and textures each face from the photo that sees it. The live mesh stays green where a sharp frame has covered it, and amber where it has not.
+- Measure distance, bounding size, area, and volume. Units: meters, centimeters, feet, or inches.
 - Scan an object two ways:
   - **LiDAR object** — a bounds sphere you place in the room (furniture, fixtures).
   - **Photo object** — RealityKit guided capture, then on-device photogrammetry. iOS only builds the mobile (reduced) detail level; finer levels need a Mac.
 - Crop (triangles are clipped, not only deleted), smooth, simplify by merging nearby vertices, and drop small disconnected fragments. Revert to the original mesh.
-- Measure distance by tapping two points. Units: meters, centimeters, feet, or inches.
-- Export **PLY** (vertex color), **OBJ** (zip with MTL and a baked texture when it fits), **STL** and **DXF** (millimeters or meters, optional Z-up), **USDZ**, and **GLB**.
+- Export **PLY**, **OBJ+JPG**, **STL**, **DXF**, **USDZ**, **GLB**, and **All data** (frames, poses, depth, and confidence).
 - A scan library with thumbnails, rename, delete, a SceneKit viewer (shaded uncolored mesh, background and mesh color, optional wireframe), and an AR preview with a Close button back to the viewer.
 - Onboarding, light and dark mode, and English strings in `Localizable.strings` so another language (Persian is a likely next one) can be added as `fa.lproj` without rewriting the UI. Layout uses leading and trailing edges.
 

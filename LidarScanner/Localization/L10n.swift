@@ -272,4 +272,42 @@ enum L10n {
     static var statVertices: String { tr("stats.vertices", "Vertices") }
     static var statTriangles: String { tr("stats.triangles.label", "Triangles") }
     static var statArea: String { tr("stats.area", "Area") }
+    static var statVolume: String { tr("stats.volume", "Volume") }
+    static var statSize: String { tr("stats.size", "Size (W × L × H)") }
+
+    static var scanGuidanceFast: String { tr("scan.guidance.fast", "Moving too fast. Slow down so the frames stay sharp.") }
+    static var scanGuidanceCeiling: String { tr("scan.guidance.ceiling", "Tilt up and cover the ceiling.") }
+    static var scanHighRes: String { tr("scan.highRes", "High-res capture") }
+    static var scanRange: String { tr("scan.range", "Range") }
+    static var scanConfidence: String { tr("scan.confidence", "Depth confidence") }
+    static var confidenceLow: String { tr("scan.confidence.low", "Low") }
+    static var confidenceMed: String { tr("scan.confidence.med", "Med") }
+    static var confidenceHigh: String { tr("scan.confidence.high", "High") }
+
+    static var qualityTitle: String { tr("quality.title", "Build the model") }
+    static var qualityBody: String { tr("quality.body", "The gray mesh is already saved. A finer build fuses the LiDAR frames and textures each face from the photos.") }
+    static var qualityFast: String { tr("quality.fast", "Fast") }
+    static var qualityBalanced: String { tr("quality.balanced", "Balanced") }
+    static var qualityHD: String { tr("quality.hd", "HD") }
+    static var qualityCustom: String { tr("quality.custom", "Custom") }
+    static var qualityFastDetail: String { tr("quality.fast.detail", "Texture the live mesh. Quickest.") }
+    static var qualityBalancedDetail: String { tr("quality.balanced.detail", "10 mm fusion, 2K texture.") }
+    static var qualityHDDetail: String { tr("quality.hd.detail", "5 mm fusion, 4K texture.") }
+    static var qualityVoxel: String { tr("quality.voxel", "Voxel size") }
+    static var qualitySmooth: String { tr("quality.smooth", "Smoothing") }
+    static var qualityTriangles: String { tr("quality.triangles", "Target triangles") }
+    static var qualityTexture: String { tr("quality.texture", "Texture size") }
+    static var qualityStart: String { tr("quality.start", "Build") }
+    static var qualityLater: String { tr("quality.later", "Not now") }
+    static var qualityEstimateFast: String { tr("quality.estimate.fast", "About half a minute") }
+    static var qualityEstimateBalanced: String { tr("quality.estimate.balanced", "About 1–3 minutes") }
+    static var qualityEstimateHD: String { tr("quality.estimate.hd", "About 3–8 minutes") }
+    static var qualityWorkingMesh: String { tr("quality.working.mesh", "Fusing depth") }
+    static var qualityWorkingClean: String { tr("quality.working.clean", "Cleaning the mesh") }
+    static var qualityWorkingTexture: String { tr("quality.working.texture", "Texturing") }
+    static var qualityNeedsFrames: String { tr("quality.needsFrames", "This scan has no saved camera frames to rebuild from.") }
+    static var qualityRefine: String { tr("quality.refine", "Refine mesh") }
+    static var qualityRetexture: String { tr("quality.retexture", "Re-texture") }
+    static var exportAllData: String { tr("export.allData", "All data") }
+    static var exportAllDataDetail: String { tr("export.allData.detail", "Photos, camera poses, depth, and confidence for this scan.") }
 }

@@ -7,6 +7,10 @@ struct RGBAImage: Sendable {
     var width: Int
     var height: Int
     var exposureScale: Float
+    var fx: Float = 0
+    var fy: Float = 0
+    var cx: Float = 0
+    var cy: Float = 0
 }
 
 struct DepthImage: Sendable {
