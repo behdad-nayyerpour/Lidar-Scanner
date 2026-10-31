@@ -292,6 +292,10 @@
 "quality.working.mesh" = "Fusing depth";
 "quality.working.clean" = "Cleaning the mesh";
 "quality.working.texture" = "Texturing";
+"quality.stage.atlas" = "Packing the texture";
+"quality.stage.views" = "Choosing photos";
+"quality.stage.paint" = "Painting the texture";
+"overlay.studio" = "Shaded";
 "quality.needsFrames" = "This scan has no saved camera frames to rebuild from.";
 "quality.refine" = "Refine mesh";
 "quality.retexture" = "Re-texture";

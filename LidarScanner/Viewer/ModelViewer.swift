@@ -464,6 +464,12 @@ struct ModelViewer: View {
                         .foregroundStyle(AppColor.textSecondary)
                 }
                 ProgressView(value: job.progress).tint(AppColor.accent)
+                if !library.buildLog.isEmpty {
+                    Text(library.buildLog)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(AppColor.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 Button(L10n.colorCancel) { library.cancelRefinement() }
                     .font(.subheadline.weight(.semibold))
             }

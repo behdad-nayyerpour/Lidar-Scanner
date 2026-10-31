@@ -309,6 +309,10 @@ enum L10n {
     static var qualityWorkingMesh: String { tr("quality.working.mesh", "Fusing depth") }
     static var qualityWorkingClean: String { tr("quality.working.clean", "Cleaning the mesh") }
     static var qualityWorkingTexture: String { tr("quality.working.texture", "Texturing") }
+    static var qualityStageAtlas: String { tr("quality.stage.atlas", "Packing the texture") }
+    static var qualityStageViews: String { tr("quality.stage.views", "Choosing photos") }
+    static var qualityStagePaint: String { tr("quality.stage.paint", "Painting the texture") }
+    static var overlayStudio: String { tr("overlay.studio", "Shaded") }
     static var qualityNeedsFrames: String { tr("quality.needsFrames", "This scan has no saved camera frames to rebuild from.") }
     static var qualityRefine: String { tr("quality.refine", "Refine mesh") }
     static var qualityRetexture: String { tr("quality.retexture", "Re-texture") }

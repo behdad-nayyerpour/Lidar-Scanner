@@ -6,6 +6,7 @@ import UIKit
 import simd
 
 enum ScanOverlayStyle: Int, CaseIterable, Identifiable {
+    case studio
     case wireAndFill
     case fill
     case hidden
@@ -14,6 +15,7 @@ enum ScanOverlayStyle: Int, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .studio: return "square.grid.3x3.fill"
         case .wireAndFill: return "point.3.connected.trianglepath.dotted"
         case .fill: return "square.fill"
         case .hidden: return "eye.slash"
@@ -22,6 +24,7 @@ enum ScanOverlayStyle: Int, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .studio: return L10n.overlayStudio
         case .wireAndFill: return L10n.overlayBoth
         case .fill: return L10n.overlayFill
         case .hidden: return L10n.overlayOff
@@ -85,8 +88,8 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
     init(mode: ScanMode, library: ScanLibrary) {
         self.mode = mode
         self.library = library
-        let stored = UserDefaults.standard.object(forKey: "scanOverlayStyle") as? Int
-        self.overlayStyle = ScanOverlayStyle(rawValue: stored ?? ScanOverlayStyle.wireAndFill.rawValue) ?? .wireAndFill
+        let stored = UserDefaults.standard.object(forKey: "scanOverlayStyle2") as? Int
+        self.overlayStyle = ScanOverlayStyle(rawValue: stored ?? ScanOverlayStyle.studio.rawValue) ?? .studio
         super.init()
         sceneView.delegate = self
         sceneView.session.delegate = self
@@ -460,12 +463,14 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
 
     func setOverlayStyle(_ style: ScanOverlayStyle) {
         overlayStyle = style
-        UserDefaults.standard.set(style.rawValue, forKey: "scanOverlayStyle")
+        UserDefaults.standard.set(style.rawValue, forKey: "scanOverlayStyle2")
         sceneView.scene.rootNode.enumerateChildNodes { node, _ in
             if node.name == "meshFill" {
                 node.isHidden = style == .hidden
             } else if node.name == "meshWire" {
                 node.isHidden = style != .wireAndFill
+            } else if node.name == "meshRim" {
+                node.isHidden = style != .studio
             }
         }
     }
@@ -631,6 +636,9 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
 enum LiveMeshBuilder {
     /// Fill plus wireframe share one triangle index buffer. Line mode draws the edges on the GPU, so the overlay does not build a second edge list.
     static func node(for anchor: ARMeshAnchor, style: ScanOverlayStyle, covered: Bool) -> SCNNode {
+        if style == .studio {
+            return studioNode(for: anchor)
+        }
         let geometry = anchor.geometry
         let vertices = geometry.vertices
         let normals = geometry.normals
@@ -735,5 +743,140 @@ enum LiveMeshBuilder {
             parent.addChildNode(wireNode)
         }
         return parent
+    }
+
+    /// Opaque glossy purple, a 25 cm world grid, and a dashed rim where the scan ends.
+    private static func studioNode(for anchor: ARMeshAnchor) -> SCNNode {
+        let geometry = anchor.geometry
+        let vertices = geometry.vertices
+        let normals = geometry.normals
+        let faces = geometry.faces
+        let vertexSource = SCNGeometrySource(
+            buffer: vertices.buffer,
+            vertexFormat: vertices.format,
+            semantic: .vertex,
+            vertexCount: vertices.count,
+            dataOffset: vertices.offset,
+            dataStride: vertices.stride
+        )
+        let normalSource = SCNGeometrySource(
+            buffer: normals.buffer,
+            vertexFormat: normals.format,
+            semantic: .normal,
+            vertexCount: normals.count,
+            dataOffset: normals.offset,
+            dataStride: normals.stride
+        )
+        var indices = [UInt32]()
+        indices.reserveCapacity(faces.count * 3)
+        let pointer = faces.buffer.contents()
+        let corners = max(1, faces.indexCountPerPrimitive)
+        for face in 0..<faces.count {
+            guard corners >= 3 else { continue }
+            var tri: [UInt32] = []
+            for corner in 0..<3 {
+                let offset = (face * corners + corner) * faces.bytesPerIndex
+                if faces.bytesPerIndex == 4 {
+                    tri.append(pointer.advanced(by: offset).assumingMemoryBound(to: UInt32.self).pointee)
+                } else if faces.bytesPerIndex == 2 {
+                    tri.append(UInt32(pointer.advanced(by: offset).assumingMemoryBound(to: UInt16.self).pointee))
+                }
+            }
+            guard tri.count == 3 else { continue }
+            indices.append(contentsOf: tri)
+        }
+        let surface = SCNGeometry(sources: [vertexSource, normalSource], elements: [
+            SCNGeometryElement(data: Packed.indexData(indices), primitiveType: .triangles, primitiveCount: indices.count / 3, bytesPerIndex: 4)
+        ])
+        let material = SCNMaterial()
+        material.lightingModel = .blinn
+        material.diffuse.contents = UIColor(red: 0.52, green: 0.08, blue: 0.95, alpha: 1)
+        material.specular.contents = UIColor(white: 0.7, alpha: 1)
+        material.shininess = 0.35
+        material.transparency = 1
+        material.isDoubleSided = false
+        material.shaderModifiers = [.surface: Self.gridModifier]
+        surface.materials = [material]
+        let fill = SCNNode(geometry: surface)
+        fill.name = "meshFill"
+        fill.renderingOrder = 10
+
+        let rim = SCNNode(geometry: boundaryDashes(indices: indices, vertices: vertices))
+        rim.name = "meshRim"
+        rim.renderingOrder = 12
+
+        let parent = SCNNode()
+        parent.name = "mesh"
+        parent.addChildNode(fill)
+        parent.addChildNode(rim)
+        return parent
+    }
+
+    private static let gridModifier = """
+    #pragma body
+    vec3 world = (scn_frame.inverseViewTransform * vec4(_surface.position, 1.0)).xyz;
+    vec3 n = abs(normalize((scn_frame.inverseViewTransform * vec4(_surface.normal, 0.0)).xyz));
+    vec2 plane = n.y >= n.x && n.y >= n.z ? world.xz : (n.x >= n.z ? world.yz : world.xy);
+    vec2 cell = plane / 0.25;
+    vec2 fractCell = fract(cell);
+    float line = min(min(fractCell.x, 1.0 - fractCell.x), min(fractCell.y, 1.0 - fractCell.y));
+    float grid = 1.0 - smoothstep(0.0, 0.012, line);
+    vec3 purple = vec3(0.56, 0.10, 0.98);
+    vec3 ink = vec3(0.16, 0.02, 0.28);
+    _surface.diffuse.rgb = mix(purple, ink, grid);
+    _surface.specular.rgb = vec3(0.65);
+    _surface.shininess = 0.45;
+    """
+
+    private static func boundaryDashes(indices: [UInt32], vertices: ARGeometrySource) -> SCNGeometry {
+        var counts: [UInt64: Int] = [:]
+        let triangles = indices.count / 3
+        for triangle in 0..<triangles {
+            for corner in 0..<3 {
+                let a = indices[triangle * 3 + corner]
+                let b = indices[triangle * 3 + (corner + 1) % 3]
+                let key = (UInt64(min(a, b)) << 32) | UInt64(max(a, b))
+                counts[key, default: 0] += 1
+            }
+        }
+        var dashes: [UInt32] = []
+        let pointer = vertices.buffer.contents()
+        func position(_ index: UInt32) -> SIMD3<Float> {
+            let raw = UnsafeRawPointer(pointer).advanced(by: vertices.offset + vertices.stride * Int(index))
+            return SIMD3(raw.loadUnaligned(as: Float.self), raw.advanced(by: 4).loadUnaligned(as: Float.self), raw.advanced(by: 8).loadUnaligned(as: Float.self))
+        }
+        var extra: [SIMD3<Float>] = []
+        for (key, count) in counts where count == 1 {
+            let a = UInt32(key >> 32)
+            let b = UInt32(key & 0xffff_ffff)
+            guard Int(a) < vertices.count, Int(b) < vertices.count else { continue }
+            let start = position(a)
+            let end = position(b)
+            let length = simd_distance(start, end)
+            guard length > 0.01 else { continue }
+            let direction = (end - start) / length
+            var cursor: Float = 0
+            while cursor < length {
+                let dash = min(0.045, length - cursor)
+                let p0 = start + direction * cursor
+                let p1 = start + direction * (cursor + dash)
+                let i0 = UInt32(extra.count)
+                extra.append(p0)
+                extra.append(p1)
+                dashes.append(i0)
+                dashes.append(i0 + 1)
+                cursor += 0.09
+            }
+        }
+        guard !extra.isEmpty else { return SCNGeometry() }
+        let source = SCNGeometrySource(vertices: extra.map { SCNVector3($0) })
+        let element = SCNGeometryElement(data: Packed.indexData(dashes), primitiveType: .line, primitiveCount: dashes.count / 2, bytesPerIndex: 4)
+        let geometry = SCNGeometry(sources: [source], elements: [element])
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor(red: 1, green: 0.95, blue: 0.55, alpha: 1)
+        material.isDoubleSided = true
+        geometry.materials = [material]
+        return geometry
     }
 }

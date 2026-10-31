@@ -9,6 +9,7 @@ final class ScanLibrary: ObservableObject {
     @Published private(set) var thumbnails: [UUID: UIImage] = [:]
     @Published var colorJob: ColorJob?
     @Published var refineJob: ColorJob?
+    @Published var buildLog = ""
     @Published var colorNotice: String?
 
     private var colorSignal = WorkSignal()
@@ -414,6 +415,9 @@ final class ScanLibrary: ObservableObject {
         let signal = WorkSignal()
         refineSignal = signal
         refineJob = ColorJob(scanID: id, progress: 0.02, message: settings.estimate)
+        buildLog = ""
+        let started = CFAbsoluteTimeGetCurrent()
+        var lastStage = ""
         let paths = paths(for: id)
         let meshURL = paths.exists(paths.original) ? paths.original : paths.mesh
         let framesURL = paths.frames
@@ -436,6 +440,11 @@ final class ScanLibrary: ObservableObject {
                     guard let self, generation == self.refineGeneration else { return }
                     self.refineJob?.progress = fraction
                     self.refineJob?.message = message
+                    if message != lastStage {
+                        lastStage = message
+                        let seconds = Int(CFAbsoluteTimeGetCurrent() - started)
+                        self.buildLog += "\(seconds)s  \(message)\n"
+                    }
                 }
             }
             let ply = MeshIO.encode(result.mesh)

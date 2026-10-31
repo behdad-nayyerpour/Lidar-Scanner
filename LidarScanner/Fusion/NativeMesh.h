@@ -15,9 +15,11 @@ typedef struct {
     uint32_t *indices;
 } NMMesh;
 
+typedef void (*NMReport)(int percent, void *context);
+
 /// Builds a per-face UV atlas with xatlas (MIT). Positions are tightly packed xyz.
-/// `cancelFlag` may be NULL. Returns 0 on success.
-int NMBuildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *indices, uint32_t indexCount, int resolution, volatile int *cancelFlag, NMMesh *outMesh);
+/// `cancelFlag` and `report` may be NULL. Returns 0 on success.
+int NMBuildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *indices, uint32_t indexCount, int resolution, volatile int *cancelFlag, NMReport report, void *context, NMMesh *outMesh);
 
 /// Quadric simplification with meshoptimizer (MIT). Positions are tightly packed xyz.
 /// Returns 0 on success.

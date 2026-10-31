@@ -3,6 +3,46 @@ import simd
 @testable import LidarScanner
 
 final class FusionSelfTests: XCTestCase {
+    func testTexturePipelineFinishesForARoomSizedMesh() {
+        let mesh = gridMesh(columns: 501, rows: 301)
+        XCTAssertGreaterThan(mesh.triangleCount, 250_000)
+        var frames: [StoredKeyframe] = []
+        let view = matrix_identity_float4x4
+        for index in 0..<60 {
+            var frame = StoredKeyframe(
+                index: index + 1,
+                timestamp: Double(index),
+                width: 64,
+                height: 48,
+                depthWidth: 32,
+                depthHeight: 24,
+                fx: 40,
+                fy: 40,
+                cx: 32,
+                cy: 24,
+                view: StoredKeyframe.pack(view),
+                transform: StoredKeyframe.pack(view),
+                camera: [Float(index) * 0.4, 1.5, 1],
+                meanRed: 120,
+                meanGreen: 120,
+                meanBlue: 120,
+                blur: 80
+            )
+            frame.camera = [Float(index) * 0.4, 1.5, 1]
+            frames.append(frame)
+        }
+        let started = Date()
+        _ = AtlasTexturer.texture(
+            mesh: mesh,
+            directory: FileManager.default.temporaryDirectory,
+            frames: frames,
+            settings: .balanced,
+            signal: nil,
+            progress: nil
+        )
+        XCTAssertLessThan(Date().timeIntervalSince(started), 90)
+    }
+
     func testLandscapeRightProjectionMatchesHandComputedPixels() {
         let fx: Float = 100
         let fy: Float = 100
@@ -130,6 +170,25 @@ final class FusionSelfTests: XCTestCase {
         let repaired = MeshCoverage.fillingGaps(fused: ScanMesh(), reference: reference, tolerance: 0.06)
         let repairedCoverage = MeshCoverage.fraction(of: reference, near: repaired, tolerance: 0.06)
         XCTAssertGreaterThan(repairedCoverage, 0.9)
+    }
+
+    private func gridMesh(columns: Int, rows: Int) -> ScanMesh {
+        var mesh = ScanMesh()
+        for y in 0..<rows {
+            for x in 0..<columns {
+                mesh.positions.append(SIMD3(Float(x) * 0.01, 0, Float(y) * 0.01))
+            }
+        }
+        for y in 0..<(rows - 1) {
+            for x in 0..<(columns - 1) {
+                let index = y * columns + x
+                mesh.indices.append(contentsOf: [
+                    UInt32(index), UInt32(index + 1), UInt32(index + columns),
+                    UInt32(index + 1), UInt32(index + columns + 1), UInt32(index + columns)
+                ])
+            }
+        }
+        return mesh
     }
 
     private func sampleFrame(view: simd_float4x4) -> StoredKeyframe {

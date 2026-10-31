@@ -1,6 +1,16 @@
 import UIKit
 import simd
 
+private final class AtlasTick: @unchecked Sendable {
+    var onPercent: ((Int) -> Void)?
+    var cancelFlag: Int32 = 0
+}
+
+private let atlasReport: @convention(c) (Int32, UnsafeMutableRawPointer?) -> Void = { percent, user in
+    guard let user else { return }
+    Unmanaged<AtlasTick>.fromOpaque(user).takeUnretainedValue().onPercent?(Int(percent))
+}
+
 enum AtlasTexturer {
     static func texture(
         mesh source: ScanMesh,
@@ -12,16 +22,26 @@ enum AtlasTexturer {
     ) -> (mesh: ScanMesh, image: UIImage)? {
         guard source.triangleCount > 8, !allFrames.isEmpty else { return nil }
         if signal?.isCancelled == true { return nil }
-        let frames = decimatedFrames(allFrames, limit: 72)
-        progress?(0.05)
-        var mesh = unwrap(source, resolution: settings.textureSize)
+        let faceCap = settings.preset == "hd" ? 80_000 : 48_000
+        var prepared = source
+        if prepared.triangleCount > faceCap {
+            progress?(0.01)
+            let started = CFAbsoluteTimeGetCurrent()
+            prepared = prepared.simplified(targetTriangles: faceCap)
+            Log.scan.info("texture decimate faces=\(prepared.triangleCount, privacy: .public) ms=\(ScanTiming.milliseconds(since: started), privacy: .public)")
+        }
+        let frames = spreadFrames(allFrames, limit: 48)
+        progress?(0.04)
+        var mesh = unwrap(prepared, resolution: min(settings.textureSize, 2048), signal: signal) { fraction in
+            progress?(0.04 + 0.46 * fraction)
+        }
         guard mesh.uvs.count == mesh.positions.count, mesh.triangleCount > 0 else { return nil }
         mesh.recomputeNormals()
-        progress?(0.15)
-        let chosen = selectViews(mesh: mesh, directory: directory, frames: frames, settings: settings, signal: signal) { fraction in
-            progress?(0.15 + 0.35 * fraction)
+        progress?(0.52)
+        let chosen = chooseViews(mesh: mesh, frames: frames, settings: settings, signal: signal) { fraction in
+            progress?(0.52 + 0.18 * fraction)
         }
-        progress?(0.55)
+        progress?(0.72)
         guard var atlas = rasterize(mesh: mesh, directory: directory, frames: frames, chosen: chosen, settings: settings, signal: signal, progress: { fraction in
             progress?(0.7 + 0.25 * fraction)
         }) else {
@@ -35,6 +55,114 @@ enum AtlasTexturer {
         return (mesh, image)
     }
 
+    /// Keeps frames that actually see different parts of the room, not the sharpest duplicates.
+    private static func spreadFrames(_ frames: [StoredKeyframe], limit: Int) -> [StoredKeyframe] {
+        let ranked = frames.sorted { $0.blur > $1.blur }
+        var kept: [StoredKeyframe] = []
+        for frame in ranked {
+            if kept.count >= limit { break }
+            let far = kept.allSatisfy { existing in
+                simd_distance(existing.cameraPosition, frame.cameraPosition) > 0.35
+                    || angleBetween(existing, frame) > 0.45
+            }
+            if kept.isEmpty || far { kept.append(frame) }
+        }
+        if kept.count < min(12, frames.count) {
+            return Array(ranked.prefix(min(limit, frames.count)))
+        }
+        return kept
+    }
+
+    private static func angleBetween(_ a: StoredKeyframe, _ b: StoredKeyframe) -> Float {
+        let forwardA = SIMD3<Float>(-a.cameraToWorld.columns.2.x, -a.cameraToWorld.columns.2.y, -a.cameraToWorld.columns.2.z)
+        let forwardB = SIMD3<Float>(-b.cameraToWorld.columns.2.x, -b.cameraToWorld.columns.2.y, -b.cameraToWorld.columns.2.z)
+        let length = simd_length(forwardA) * simd_length(forwardB)
+        guard length > 1e-4 else { return 0 }
+        return acos(min(1, max(-1, simd_dot(forwardA, forwardB) / length)))
+    }
+
+    /// One photo per 35 cm patch. Scoring patches, not every face against every frame, is what keeps a room build under a minute.
+    private static func chooseViews(
+        mesh: ScanMesh,
+        frames: [StoredKeyframe],
+        settings: FusionSettings,
+        signal: WorkSignal?,
+        progress: ((Double) -> Void)?
+    ) -> [Int] {
+        var chosen = [Int](repeating: -1, count: mesh.triangleCount)
+        var maps: [DepthImage?] = []
+        maps.reserveCapacity(frames.count)
+        for (index, frame) in frames.enumerated() {
+            if signal?.isCancelled == true { return chosen }
+            maps.append(FaceVisibility.depthMap(mesh: mesh, frame: frame))
+            progress?(0.35 * Double(index + 1) / Double(max(frames.count, 1)))
+        }
+        let cell: Float = 0.35
+        var groups: [SIMD3<Int32>: [Int]] = [:]
+        for triangle in 0..<mesh.triangleCount {
+            let i0 = Int(mesh.indices[triangle * 3])
+            let i1 = Int(mesh.indices[triangle * 3 + 1])
+            let i2 = Int(mesh.indices[triangle * 3 + 2])
+            guard i0 < mesh.positions.count, i1 < mesh.positions.count, i2 < mesh.positions.count else { continue }
+            let center = (mesh.positions[i0] + mesh.positions[i1] + mesh.positions[i2]) / 3
+            let key = SIMD3<Int32>(Int32(floor(center.x / cell)), Int32(floor(center.y / cell)), Int32(floor(center.z / cell)))
+            groups[key, default: []].append(triangle)
+        }
+        let keys = Array(groups.keys)
+        for (offset, key) in keys.enumerated() {
+            if offset & 31 == 0 {
+                if signal?.isCancelled == true { break }
+                progress?(Double(offset) / Double(max(keys.count, 1)))
+            }
+            guard let triangles = groups[key], let triangle = triangles.first else { continue }
+            let i0 = Int(mesh.indices[triangle * 3])
+            let i1 = Int(mesh.indices[triangle * 3 + 1])
+            let i2 = Int(mesh.indices[triangle * 3 + 2])
+            let points = [mesh.positions[i0], mesh.positions[i1], mesh.positions[i2]]
+            let normal = triangle < mesh.normals.count ? mesh.normals[i0] : SIMD3<Float>(0, 1, 0)
+            let centroid = (points[0] + points[1] + points[2]) / 3
+            var best = -1
+            var bestScore: Float = 0
+            for (frameIndex, frame) in frames.enumerated() {
+                if frameIndex < maps.count, let map = maps[frameIndex], hidden(centroid, frame: frame, map: map) { continue }
+                guard let score = scoreFace(points: points, centroid: centroid, normal: normal, frame: frame, buffer: nil, settings: settings, relaxed: false) else { continue }
+                if score > bestScore {
+                    bestScore = score
+                    best = frameIndex
+                }
+            }
+            if best < 0 {
+                for (frameIndex, frame) in frames.enumerated() {
+                    guard let score = scoreFace(points: points, centroid: centroid, normal: normal, frame: frame, buffer: nil, settings: settings, relaxed: true) else { continue }
+                    if score > bestScore {
+                        bestScore = score
+                        best = frameIndex
+                    }
+                }
+            }
+            for item in triangles { chosen[item] = best }
+        }
+        return chosen
+    }
+
+    private static func hidden(_ point: SIMD3<Float>, frame: StoredKeyframe, map: DepthImage) -> Bool {
+        let scaleX = Float(map.width) / Float(max(frame.width, 1))
+        let scaleY = Float(map.height) / Float(max(frame.height, 1))
+        guard let hit = CameraProjection.pixel(
+            world: point,
+            viewMatrix: frame.viewMatrix,
+            fx: frame.fx * scaleX,
+            fy: frame.fy * scaleY,
+            cx: frame.cx * scaleX,
+            cy: frame.cy * scaleY
+        ) else { return true }
+        let x = min(map.width - 1, max(0, Int(hit.pixel.x)))
+        let y = min(map.height - 1, max(0, Int(hit.pixel.y)))
+        let nearest = map.values[y * map.width + x]
+        guard nearest > 0.05 else { return false }
+        return hit.depth > nearest + max(0.08, hit.depth * 0.08)
+    }
+
     private static func decimatedFrames(_ frames: [StoredKeyframe], limit: Int) -> [StoredKeyframe] {
         guard frames.count > limit else { return frames }
         let sorted = frames.sorted { $0.blur > $1.blur }
@@ -42,7 +170,7 @@ enum AtlasTexturer {
         return frames.filter { frame in kept.contains(where: { $0.index == frame.index }) }
     }
 
-    private static func unwrap(_ mesh: ScanMesh, resolution: Int) -> ScanMesh {
+    private static func unwrap(_ mesh: ScanMesh, resolution: Int, signal: WorkSignal?, progress: ((Double) -> Void)?) -> ScanMesh {
         var packed: [Float] = []
         packed.reserveCapacity(mesh.positions.count * 3)
         for position in mesh.positions {
@@ -50,10 +178,16 @@ enum AtlasTexturer {
             packed.append(position.y)
             packed.append(position.z)
         }
+        let tick = AtlasTick()
+        tick.onPercent = { percent in
+            if signal?.isCancelled == true { tick.cancelFlag = 1 }
+            progress?(Double(percent) / 100)
+        }
         var native = NMMesh()
+        let context = Unmanaged.passUnretained(tick).toOpaque()
         let code: Int32 = packed.withUnsafeBufferPointer { positions in
             mesh.indices.withUnsafeBufferPointer { indices in
-                NMBuildAtlas(positions.baseAddress, UInt32(mesh.positions.count), indices.baseAddress, UInt32(mesh.indices.count), Int32(resolution), nil, &native)
+                NMBuildAtlas(positions.baseAddress, UInt32(mesh.positions.count), indices.baseAddress, UInt32(mesh.indices.count), Int32(resolution), &tick.cancelFlag, atlasReport, context, &native)
             }
         }
         defer { NMFreeMesh(&native) }

@@ -6,9 +6,24 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool atlasProgress(xatlas::ProgressCategory, int, void *user) {
-    if (user == nullptr) { return true; }
-    return *static_cast<volatile int *>(user) == 0;
+struct AtlasHooks {
+    volatile int *cancel;
+    NMReport report;
+    void *context;
+};
+
+static bool atlasProgress(xatlas::ProgressCategory category, int progress, void *user) {
+    auto *hooks = static_cast<AtlasHooks *>(user);
+    if (hooks == nullptr) { return true; }
+    if (hooks->report != nullptr) {
+        int percent = progress / 2;
+        if (category == xatlas::ProgressCategory::PackCharts) {
+            percent = 50 + progress / 2;
+        }
+        hooks->report(percent, hooks->context);
+    }
+    if (hooks->cancel != nullptr && *hooks->cancel != 0) { return false; }
+    return true;
 }
 
 static void clearMesh(NMMesh *mesh) {
@@ -19,14 +34,15 @@ static void clearMesh(NMMesh *mesh) {
     memset(mesh, 0, sizeof(NMMesh));
 }
 
-int NMBuildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *indices, uint32_t indexCount, int resolution, volatile int *cancelFlag, NMMesh *outMesh) {
+int NMBuildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *indices, uint32_t indexCount, int resolution, volatile int *cancelFlag, NMReport report, void *context, NMMesh *outMesh) {
     if (outMesh == nullptr || positions == nullptr || indices == nullptr || vertexCount == 0 || indexCount < 3 || indexCount % 3 != 0) {
         return 1;
     }
     memset(outMesh, 0, sizeof(NMMesh));
     xatlas::Atlas *atlas = xatlas::Create();
     if (atlas == nullptr) { return 2; }
-    xatlas::SetProgressCallback(atlas, atlasProgress, const_cast<int *>(cancelFlag));
+    AtlasHooks hooks { cancelFlag, report, context };
+    xatlas::SetProgressCallback(atlas, atlasProgress, &hooks);
 
     xatlas::MeshDecl decl;
     decl.vertexCount = vertexCount;
@@ -45,11 +61,14 @@ int NMBuildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *i
     xatlas::ChartOptions charts;
     charts.maxIterations = 1;
     xatlas::PackOptions pack;
-    pack.resolution = static_cast<uint32_t>(resolution > 0 ? resolution : 2048);
+    int capped = resolution > 2048 ? 2048 : resolution;
+    if (capped < 256) { capped = 256; }
+    pack.resolution = static_cast<uint32_t>(capped);
     pack.padding = 4;
     pack.bilinear = true;
     pack.texelsPerUnit = 0;
     pack.bruteForce = false;
+    pack.blockAlign = true;
     pack.createImage = false;
     xatlas::Generate(atlas, charts, pack);
     if (cancelFlag != nullptr && *cancelFlag != 0) {

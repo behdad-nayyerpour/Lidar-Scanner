@@ -39,7 +39,7 @@ struct FusionSettings: Codable, Equatable {
         maxRange: 3,
         minConfidence: 2,
         smoothIterations: 4,
-        targetTriangles: 180_000,
+        targetTriangles: 48_000,
         textureSize: 2048,
         fuse: true
     )
@@ -50,7 +50,7 @@ struct FusionSettings: Codable, Equatable {
         maxRange: 3,
         minConfidence: 2,
         smoothIterations: 4,
-        targetTriangles: 140_000,
+        targetTriangles: 80_000,
         textureSize: 4096,
         fuse: true
     )

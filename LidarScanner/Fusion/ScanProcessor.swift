@@ -71,7 +71,8 @@ enum ScanProcessor {
         if signal?.isCancelled == true || frames.isEmpty {
             return BuildResult(mesh: working, texture: nil, notice: notice, replacedGeometry: replaced)
         }
-        progress?(0.55, L10n.qualityWorkingTexture)
+        progress?(0.55, L10n.qualityStageAtlas)
+        let textureStarted = CFAbsoluteTimeGetCurrent()
         guard let textured = AtlasTexturer.texture(
             mesh: working,
             directory: directory,
@@ -79,11 +80,14 @@ enum ScanProcessor {
             settings: settings,
             signal: signal,
             progress: { fraction in
-                progress?(0.55 + 0.43 * fraction, L10n.qualityWorkingTexture)
+                let stage = fraction < 0.52 ? L10n.qualityStageAtlas : (fraction < 0.72 ? L10n.qualityStageViews : L10n.qualityStagePaint)
+                progress?(0.55 + 0.43 * fraction, stage)
             }
         ) else {
+            Log.scan.info("texture stopped ms=\(ScanTiming.milliseconds(since: textureStarted), privacy: .public)")
             return BuildResult(mesh: working, texture: nil, notice: notice, replacedGeometry: replaced)
         }
+        Log.scan.info("texture faces=\(textured.mesh.triangleCount, privacy: .public) ms=\(ScanTiming.milliseconds(since: textureStarted), privacy: .public)")
         return BuildResult(mesh: textured.mesh, texture: textured.image, notice: notice, replacedGeometry: replaced)
     }
 }
