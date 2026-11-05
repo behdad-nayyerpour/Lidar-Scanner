@@ -75,6 +75,11 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: LidarScannerTests
+        excludes:
+          - "Fixtures/**"
+    resources:
+      - path: LidarScannerTests/Fixtures/RealScan
+        type: folder
     dependencies:
       - target: LidarScanner
     settings:

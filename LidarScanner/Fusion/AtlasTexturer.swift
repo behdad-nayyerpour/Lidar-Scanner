@@ -39,24 +39,206 @@ enum AtlasTexturer {
         }
         let frames = spreadFrames(allFrames, limit: 48)
         progress?(0.08)
-        var mesh = gridUnwrap(prepared)
-        progress?(0.2)
-        guard mesh.uvs.count == mesh.positions.count, mesh.triangleCount > 0 else { return nil }
-        let chosen = bestViewPerFace(mesh: mesh, directory: directory, frames: frames, settings: settings, signal: signal) { fraction in
-            progress?(0.2 + 0.5 * fraction)
+        let chosen = bestViewPerFace(mesh: prepared, directory: directory, frames: frames, settings: settings, signal: signal) { fraction in
+            progress?(0.08 + 0.42 * fraction)
         }
-        progress?(0.72)
-        guard var atlas = rasterize(mesh: mesh, directory: directory, frames: frames, chosen: chosen, settings: settings, signal: signal, progress: { fraction in
-            progress?(0.72 + 0.2 * fraction)
-        }) else {
+        progress?(0.52)
+        guard let built = photoAtlas(mesh: prepared, directory: directory, frames: frames, chosen: chosen, settings: settings) else {
             return nil
         }
-        atlas = fillUncovered(mesh: mesh, image: atlas, chosen: chosen)
         progress?(0.94)
-        paintVertexColors(&mesh, image: atlas)
-        guard let image = atlas.uiImage() else { return nil }
+        var mesh = built.mesh
+        paintVertexColors(&mesh, image: built.atlas)
+        guard let image = built.atlas.uiImage() else { return nil }
         progress?(1)
         return (mesh, image)
+    }
+
+    /// One photo crop per view. Every triangle of that view shares the crop, and the crop is the real photo, not a flat color.
+    private static func photoAtlas(
+        mesh: ScanMesh,
+        directory: URL,
+        frames: [StoredKeyframe],
+        chosen: [Int],
+        settings: FusionSettings
+    ) -> (mesh: ScanMesh, atlas: AtlasImage)? {
+        let used = Array(Set(chosen.filter { $0 >= 0 })).sorted()
+        var colors: [Int: RGBAImage] = [:]
+        for index in used {
+            guard index < frames.count, let image = KeyframeArchive.loadColor(in: directory, frame: frames[index], maxDimension: 1600) else { continue }
+            colors[index] = image
+        }
+        guard !colors.isEmpty else {
+            return (gridUnwrap(mesh), AtlasImage(width: 16, height: 16))
+        }
+        var bounds: [Int: Bounds] = [:]
+        var projected = [[SIMD2<Float>]](repeating: [], count: mesh.triangleCount)
+        for triangle in 0..<mesh.triangleCount {
+            let frameIndex = triangle < chosen.count ? chosen[triangle] : -1
+            guard frameIndex >= 0, let color = colors[frameIndex], frameIndex < frames.count else { continue }
+            let frame = frames[frameIndex]
+            let scaleX = Float(color.width) / Float(max(frame.width, 1))
+            let scaleY = Float(color.height) / Float(max(frame.height, 1))
+            let ids = (0..<3).map { Int(mesh.indices[triangle * 3 + $0]) }
+            guard ids.allSatisfy({ $0 < mesh.positions.count }) else { continue }
+            var pixels: [SIMD2<Float>] = []
+            var box = bounds[frameIndex] ?? Bounds()
+            var ok = true
+            for id in ids {
+                guard let hit = CameraProjection.pixel(
+                    world: mesh.positions[id],
+                    viewMatrix: frame.viewMatrix,
+                    fx: frame.fx * scaleX,
+                    fy: frame.fy * scaleY,
+                    cx: frame.cx * scaleX,
+                    cy: frame.cy * scaleY
+                ) else { ok = false; break }
+                let pixel = SIMD2(min(Float(color.width - 1), max(0, hit.pixel.x)), min(Float(color.height - 1), max(0, hit.pixel.y)))
+                pixels.append(pixel)
+                box.add(pixel)
+            }
+            if ok, pixels.count == 3 {
+                projected[triangle] = pixels
+                bounds[frameIndex] = box
+            }
+        }
+        let atlasSize = max(256, settings.textureSize)
+        let charts = packCharts(bounds, colors: colors, atlas: atlasSize)
+        var atlas = AtlasImage(width: atlasSize, height: atlasSize)
+        for chart in charts {
+            guard let color = colors[chart.frame] else { continue }
+            blit(color, into: &atlas, chart: chart)
+        }
+        var out = ScanMesh()
+        out.positions.reserveCapacity(mesh.triangleCount * 3)
+        out.normals.reserveCapacity(mesh.triangleCount * 3)
+        out.uvs.reserveCapacity(mesh.triangleCount * 3)
+        out.indices.reserveCapacity(mesh.triangleCount * 3)
+        let chartByFrame = Dictionary(uniqueKeysWithValues: charts.map { ($0.frame, $0) })
+        for triangle in 0..<mesh.triangleCount {
+            let ids = (0..<3).map { Int(mesh.indices[triangle * 3 + $0]) }
+            guard ids.count == 3, ids.allSatisfy({ $0 < mesh.positions.count }) else { continue }
+            let frameIndex = triangle < chosen.count ? chosen[triangle] : -1
+            let pixels = projected[triangle]
+            let chart = chartByFrame[frameIndex]
+            let start = UInt32(out.positions.count)
+            for corner in 0..<3 {
+                let index = ids[corner]
+                out.positions.append(mesh.positions[index])
+                out.normals.append(index < mesh.normals.count ? mesh.normals[index] : .zero)
+                if let chart, pixels.count == 3 {
+                    let pixel = pixels[corner]
+                    let ax = Float(chart.x) + (pixel.x - chart.minU) / chart.spanU * Float(max(chart.width - 1, 1))
+                    let ay = Float(chart.y) + (pixel.y - chart.minV) / chart.spanV * Float(max(chart.height - 1, 1))
+                    out.uvs.append(SIMD2(ax / Float(atlasSize - 1), 1 - ay / Float(atlasSize - 1)))
+                } else {
+                    out.uvs.append(.zero)
+                }
+                out.indices.append(start + UInt32(corner))
+            }
+        }
+        guard out.triangleCount > 0 else { return nil }
+        return (out, atlas)
+    }
+
+    private struct PhotoChart {
+        var frame: Int
+        var minU: Float
+        var minV: Float
+        var spanU: Float
+        var spanV: Float
+        var x: Int
+        var y: Int
+        var width: Int
+        var height: Int
+    }
+
+    private struct Bounds {
+        var minU = Float.greatestFiniteMagnitude
+        var minV = Float.greatestFiniteMagnitude
+        var maxU = -Float.greatestFiniteMagnitude
+        var maxV = -Float.greatestFiniteMagnitude
+        mutating func add(_ pixel: SIMD2<Float>) {
+            minU = min(minU, pixel.x)
+            minV = min(minV, pixel.y)
+            maxU = max(maxU, pixel.x)
+            maxV = max(maxV, pixel.y)
+        }
+    }
+
+    private struct ChartItem {
+        var frame: Int
+        var minU: Float
+        var minV: Float
+        var spanU: Float
+        var spanV: Float
+    }
+
+    private static func packCharts(_ bounds: [Int: Bounds], colors: [Int: RGBAImage], atlas: Int) -> [PhotoChart] {
+        let items: [ChartItem] = bounds.compactMap { frame, box in
+            guard let color = colors[frame] else { return nil }
+            let minU = max(0, box.minU - 2)
+            let minV = max(0, box.minV - 2)
+            let maxU = min(Float(color.width - 1), box.maxU + 2)
+            let maxV = min(Float(color.height - 1), box.maxV + 2)
+            return ChartItem(frame: frame, minU: minU, minV: minV, spanU: max(1, maxU - minU), spanV: max(1, maxV - minV))
+        }.sorted { $0.spanU * $0.spanV > $1.spanU * $1.spanV }
+        guard !items.isEmpty else { return [] }
+        var low: Float = 0.02
+        var high: Float = 1
+        var best: [PhotoChart] = []
+        for _ in 0..<14 {
+            let scale = (low + high) / 2
+            if let placed = shelf(items, scale: scale, atlas: atlas) {
+                best = placed
+                low = scale
+            } else {
+                high = scale
+            }
+        }
+        return best.isEmpty ? (shelf(items, scale: 0.02, atlas: atlas) ?? []) : best
+    }
+
+    private static func shelf(_ items: [ChartItem], scale: Float, atlas: Int) -> [PhotoChart]? {
+        let gap = 4
+        var x = gap
+        var y = gap
+        var rowHeight = 0
+        var placed: [PhotoChart] = []
+        for item in items {
+            let width = max(2, Int((item.spanU * scale).rounded(.up)))
+            let height = max(2, Int((item.spanV * scale).rounded(.up)))
+            if x + width + gap > atlas {
+                x = gap
+                y += rowHeight + gap
+                rowHeight = 0
+            }
+            if y + height + gap > atlas { return nil }
+            placed.append(PhotoChart(frame: item.frame, minU: item.minU, minV: item.minV, spanU: item.spanU, spanV: item.spanV, x: x, y: y, width: width, height: height))
+            x += width + gap
+            rowHeight = max(rowHeight, height)
+        }
+        return placed
+    }
+
+    private static func blit(_ color: RGBAImage, into atlas: inout AtlasImage, chart: PhotoChart) {
+        for y in 0..<chart.height {
+            for x in 0..<chart.width {
+                let u = chart.minU + (Float(x) + 0.5) / Float(chart.width) * chart.spanU
+                let v = chart.minV + (Float(y) + 0.5) / Float(chart.height) * chart.spanV
+                let sample = bilinear(color, min(u, Float(color.width - 1) - 0.01), min(v, Float(color.height - 1) - 0.01))
+                    ?? nearestPixel(color, u, v)
+                atlas.set(chart.x + x, chart.y + y, sample)
+            }
+        }
+    }
+
+    private static func nearestPixel(_ image: RGBAImage, _ u: Float, _ v: Float) -> SIMD3<Float> {
+        let x = min(image.width - 1, max(0, Int(u.rounded())))
+        let y = min(image.height - 1, max(0, Int(v.rounded())))
+        let index = (y * image.width + x) * 4
+        guard index + 2 < image.rgba.count else { return SIMD3(repeating: 0.72) }
+        return SIMD3(Float(image.rgba[index]) / 255, Float(image.rgba[index + 1]) / 255, Float(image.rgba[index + 2]) / 255)
     }
 
     /// Keeps frames that actually see different parts of the room, not the sharpest duplicates.
