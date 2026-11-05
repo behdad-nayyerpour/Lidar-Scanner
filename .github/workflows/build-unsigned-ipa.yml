@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build:
     name: Unsigned iOS IPA
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - name: Checkout
