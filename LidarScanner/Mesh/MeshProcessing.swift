@@ -141,7 +141,7 @@ extension ScanMesh {
         }
         defer { NMFreeMesh(&native) }
         guard code == 0, native.vertexCount > 0, native.indexCount >= 3, let positions = native.positions, let indices = native.indices else {
-            return decimated(targetRatio: Float(targetTriangles) / Float(max(triangleCount, 1)))
+            return decimated(targetRatio: Float(targetTriangles) / Float(max(triangleCount, 1))).withoutSlivers(minAltitude: maxError)
         }
         var mesh = ScanMesh()
         for index in 0..<Int(native.vertexCount) {
@@ -151,7 +151,31 @@ extension ScanMesh {
             mesh.indices.append(indices[index])
         }
         mesh.recomputeNormals()
-        return mesh.compacted()
+        return mesh.withoutSlivers(minAltitude: maxError).compacted()
+    }
+
+    /// Drops long needles left on a flat surface. A wide triangle on the keyboard stays.
+    func withoutSlivers(minAltitude: Float) -> ScanMesh {
+        guard triangleCount > 0 else { return self }
+        let limit = max(minAltitude, 0.002)
+        var kept: [UInt32] = []
+        kept.reserveCapacity(indices.count)
+        for triangle in 0..<triangleCount {
+            let ids = (0..<3).map { indices[triangle * 3 + $0] }
+            guard ids.allSatisfy({ Int($0) < positions.count }) else { continue }
+            let corners = ids.map { positions[Int($0)] }
+            var edge: Float = 0
+            for pair in [(0, 1), (1, 2), (2, 0)] {
+                edge = max(edge, simd_distance(corners[pair.0], corners[pair.1]))
+            }
+            let area = simd_length(simd_cross(corners[1] - corners[0], corners[2] - corners[0])) * 0.5
+            let altitude = edge > 1e-6 ? (2 * area / edge) : 0
+            if edge > 0.02, altitude < limit { continue }
+            kept.append(contentsOf: ids)
+        }
+        var mesh = self
+        mesh.indices = kept
+        return mesh
     }
 
     func smoothed(iterations: Int, lambda: Float) -> ScanMesh {
