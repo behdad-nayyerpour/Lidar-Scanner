@@ -903,7 +903,7 @@ struct AtlasImage {
         covered[index] = true
     }
 
-    /// `uv.y == 1` is the top row of this image. SceneKit uses the same origin.
+    /// `uv.y == 1` is the top row of this image. SceneKit converts these stored UVs at its geometry boundary.
     func sample(_ uv: SIMD2<Float>) -> SIMD3<Float>? {
         let x = Int((uv.x * Float(width - 1)).rounded())
         let y = Int(((1 - uv.y) * Float(height - 1)).rounded())

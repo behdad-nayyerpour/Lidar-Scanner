@@ -69,6 +69,12 @@ struct AABB: Sendable, Equatable {
 }
 
 enum Packed {
+    /// Stored atlas/OBJ UVs have V=1 at the top. SceneKit's UIImage sampler reads V=0 there.
+    /// Convert only at the SceneKit boundary; file UVs and OBJ/glTF exports keep their own convention.
+    static func sceneKitTexcoordData(_ values: [SIMD2<Float>]) -> Data {
+        float2Data(values.map { SIMD2($0.x, 1 - $0.y) })
+    }
+
     static func float3Data(_ values: [SIMD3<Float>]) -> Data {
         var data = Data(count: values.count * 12)
         data.withUnsafeMutableBytes { raw in
