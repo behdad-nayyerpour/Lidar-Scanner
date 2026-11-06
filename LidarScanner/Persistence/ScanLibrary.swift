@@ -20,9 +20,9 @@ final class ScanLibrary: ObservableObject {
     let root: URL
     private let fileManager = FileManager.default
 
-    init() {
+    init(root directory: URL? = nil) {
         let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        root = documents.appendingPathComponent("Scans", isDirectory: true)
+        root = directory ?? documents.appendingPathComponent("Scans", isDirectory: true)
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         reload()
     }
