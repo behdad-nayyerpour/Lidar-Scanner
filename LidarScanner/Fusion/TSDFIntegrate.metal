@@ -78,7 +78,7 @@ kernel void integrateTSDF(
     float depthD = depthTex.sample(nearest, uv + float2(0.0, 1.0 / params.depthHeight)).r;
     float slopeX = abs(depthR - depthL) * 0.5 * params.fx / max(surface, 0.05);
     float slopeY = abs(depthD - depthU) * 0.5 * params.fy / max(surface, 0.05);
-    if (confidence < 1.0) { return; }
+    if (confidence < params.minConfidence) { return; }
     float grazing = max(slopeX, slopeY);
     float signedDistance = surface - cameraDepth;
     uint index = uint(block.index) * 512u + gid.x;

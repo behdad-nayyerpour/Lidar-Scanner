@@ -182,8 +182,7 @@ final class ScanLibrary: ObservableObject {
         }
         let ply = MeshIO.encode(mesh)
         try ply.write(to: paths.mesh, options: .atomic)
-        try? fileManager.removeItem(at: paths.uvs)
-        try? fileManager.removeItem(at: paths.texture)
+        // Atlas sidecars belong to the saved Built version. Edited meshes do not use them.
         try? MeshExporter.usdz(mesh: mesh, baked: TextureBaker.bake(mesh), to: paths.preview)
         if let image = ThumbnailRenderer.image(mesh: mesh) {
             try? image.pngData()?.write(to: paths.thumbnail, options: .atomic)
@@ -398,6 +397,7 @@ final class ScanLibrary: ObservableObject {
         record.boundsMin = [bounds.min.x, bounds.min.y, bounds.min.z]
         record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
         record.isColored = coloredVertices > 0
+        record.showingBuilt = false
         record.updatedAt = Date()
         try? write(record)
         colorJob = nil
@@ -583,6 +583,7 @@ final class ScanLibrary: ObservableObject {
             record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
         }
         record.showingBuilt = built
+        record.isProcessed = built
         record.updatedAt = Date()
         try write(record)
     }

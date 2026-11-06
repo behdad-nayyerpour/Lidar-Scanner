@@ -263,7 +263,7 @@ private final class TSDFVolume {
                 guard surface >= params.minRange, surface <= params.maxRange else { continue }
                 let sampleIndex = y * depth.width + x
                 let conf = Float(sampleIndex < confidence.count ? confidence[sampleIndex] : 0)
-                guard conf >= 1 else { continue }
+                guard conf >= params.minConfidence else { continue }
                 let signedDistance = surface - cameraDepth
                 let slot = pointer.advanced(by: Int(block.index) * 512 + local)
                 // A farther surface must not carve away a nearer one already stored here.
