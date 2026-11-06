@@ -14,7 +14,8 @@ final class KeyframeRecorder: @unchecked Sendable {
     private var hasPose = false
     private var frames: [StoredKeyframe] = []
     private var directory: URL
-    private let maxFrames = 180
+    private let maxFrames = 400
+    private var lastColor: TimeInterval = 0
     var movingTooFast = false
 
     init() {
@@ -27,6 +28,7 @@ final class KeyframeRecorder: @unchecked Sendable {
         lock.lock()
         frames.removeAll()
         lastAccepted = 0
+        lastColor = 0
         hasPose = false
         movingTooFast = false
         let old = directory
@@ -51,7 +53,7 @@ final class KeyframeRecorder: @unchecked Sendable {
         lock.unlock()
         guard recording else { return }
         let timestamp = frame.timestamp
-        if previousTime > 0, timestamp - previousTime < 0.55 { return }
+        if previousTime > 0, timestamp - previousTime < 0.12 { return }
         guard case .normal = frame.camera.trackingState else { return }
 
         let transform = frame.camera.transform
@@ -81,6 +83,8 @@ final class KeyframeRecorder: @unchecked Sendable {
         let intrinsics = frame.camera.intrinsics
         let view = frame.camera.viewMatrix(for: .landscapeRight)
         lock.lock()
+        let writeColor = lastColor == 0 || timestamp - lastColor >= 0.5
+        if writeColor { lastColor = timestamp }
         movingTooFast = false
         lastAccepted = timestamp
         lastTransform = transform
@@ -92,10 +96,11 @@ final class KeyframeRecorder: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             guard let image = PixelSampler.rgbaImage(from: colorCopy, maxDimension: 1920, imageResolution: resolution) else { return }
-            guard let jpeg = KeyframeArchive.jpegData(image) else { return }
-            let colorURL = KeyframeArchive.colorURL(in: folder, index: index)
-            try? FileManager.default.createDirectory(at: colorURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? jpeg.write(to: colorURL, options: .atomic)
+            if writeColor, let jpeg = KeyframeArchive.jpegData(image) {
+                let colorURL = KeyframeArchive.colorURL(in: folder, index: index)
+                try? FileManager.default.createDirectory(at: colorURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? jpeg.write(to: colorURL, options: .atomic)
+            }
             if let depthImage {
                 try? KeyframeArchive.writeDepth(depthImage, confidence: confidence, to: KeyframeArchive.depthURL(in: folder, index: index))
             }

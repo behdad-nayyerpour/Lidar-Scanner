@@ -113,7 +113,7 @@ int NMBuildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *i
     return 0;
 }
 
-int NMSimplify(const float *positions, uint32_t vertexCount, const uint32_t *indices, uint32_t indexCount, uint32_t targetIndexCount, NMMesh *outMesh) {
+int NMSimplify(const float *positions, uint32_t vertexCount, const uint32_t *indices, uint32_t indexCount, uint32_t targetIndexCount, float maxError, NMMesh *outMesh) {
     if (outMesh == nullptr || positions == nullptr || indices == nullptr || vertexCount == 0 || indexCount < 3) {
         return 1;
     }
@@ -128,7 +128,7 @@ int NMSimplify(const float *positions, uint32_t vertexCount, const uint32_t *ind
         vertexCount,
         sizeof(float) * 3,
         targetIndexCount,
-        0.02f,
+        maxError,
         0,
         nullptr
     );

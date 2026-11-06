@@ -11,7 +11,7 @@ struct FusionSettings: Codable, Equatable {
     var fuse: Bool
 
     var voxelSize: Float { max(0.004, voxelMillimeters / 1000) }
-    var truncation: Float { voxelSize * 3.5 }
+    var truncation: Float { voxelSize * 2.5 }
     var confidenceFloor: Float { Float(min(2, max(0, minConfidence))) }
 
     var estimate: String {
@@ -70,15 +70,34 @@ struct FusionSettings: Codable, Equatable {
 }
 
 enum FusionVoxel {
-    /// LiDAR depth is about 256×192, so a pixel at 2.5 m is roughly a centimeter. Voxels finer than that only invent streaks.
-    static func millimeters(requested: Float, frames: [StoredKeyframe]) -> Float {
+    /// Voxel size follows the depth pixel at the distance actually scanned. A desk at 0.4 m is about 2 mm.
+    static func millimeters(requested: Float, frames: [StoredKeyframe], range: Float) -> Float {
         var footprints: [Float] = []
+        let distance = min(3, max(0.25, range))
         for frame in frames where frame.depthWidth > 1 && frame.fx > 1 && frame.width > 1 {
             let fxDepth = frame.fx * Float(frame.depthWidth) / Float(frame.width)
-            footprints.append(2.5 / fxDepth * 1000)
+            guard fxDepth > 1 else { continue }
+            footprints.append(distance / fxDepth * 1000)
         }
         let sorted = footprints.sorted()
         let footprint = sorted.isEmpty ? requested : sorted[sorted.count / 2]
-        return min(40, max(requested, footprint, 8))
+        return min(15, max(1.5, min(requested, footprint)))
+    }
+
+    static func medianDepth(directory: URL, frames: [StoredKeyframe]) -> Float {
+        var samples: [Float] = []
+        for frame in frames.prefix(8) where frame.depthWidth > 1 {
+            guard let loaded = try? KeyframeArchive.readDepth(at: KeyframeArchive.depthURL(in: directory, index: frame.index)) else { continue }
+            let step = max(1, loaded.0.values.count / 500)
+            var index = 0
+            while index < loaded.0.values.count {
+                let value = loaded.0.values[index]
+                if value > 0.2, value < 5 { samples.append(value) }
+                index += step
+            }
+        }
+        guard !samples.isEmpty else { return 0.6 }
+        samples.sort()
+        return samples[samples.count / 2]
     }
 }

@@ -77,7 +77,7 @@ private final class TSDFVolume {
     let voxel: Float
     let truncation: Float
     let blockSize = 8
-    let maxBlocks = 20_000
+    let maxBlocks = 32_000
     private var lookup: [BlockKey: Int] = [:]
     private var origins: [BlockKey] = []
     private var pointer: UnsafeMutablePointer<TSDFVoxel>
@@ -113,7 +113,7 @@ private final class TSDFVolume {
         let scaleY = Float(depth.height) / Float(max(frame.height, 1))
         var touched: [BlockRefCPU] = []
         var seen = Set<Int>()
-        let step = max(1, (depth.width * depth.height) / 24_000)
+        let step = max(1, (depth.width * depth.height) / 70_000)
         var pixel = 0
         let limit = depth.width * depth.height
         while pixel < limit {
@@ -121,7 +121,7 @@ private final class TSDFVolume {
             let y = pixel / depth.width
             let meters = depth.values[pixel]
             let conf = pixel < confidence.count ? confidence[pixel] : 2
-            if meters > 0.05, Float(conf) + 0.01 >= settings.confidenceFloor {
+            if meters > 0.05, conf >= 1 {
                 let world = CameraProjection.worldPoint(
                     u: (Float(x) + 0.5) / scaleX,
                     v: (Float(y) + 0.5) / scaleY,
@@ -137,8 +137,9 @@ private final class TSDFVolume {
                 let length = simd_length(direction)
                 if length > 0.05 {
                     let ray = direction / length
-                    let steps = max(1, Int(ceil(truncation / voxel)))
-                    for offset in -steps...steps {
+                    let behind = max(1, Int(ceil(truncation / voxel)))
+                    let ahead = behind * 4
+                    for offset in -ahead...behind {
                         let sample = world + ray * (Float(offset) * voxel)
                         if let index = ensureBlock(containing: sample), seen.insert(index).inserted {
                             let key = origins[index]
@@ -196,6 +197,12 @@ private final class TSDFVolume {
         return index
     }
 
+    private func depthAt(_ depth: DepthImage, _ x: Int, _ y: Int) -> Float? {
+        guard x >= 0, y >= 0, x < depth.width, y < depth.height else { return nil }
+        let value = depth.values[y * depth.width + x]
+        return value > 0.05 ? value : nil
+    }
+
     private func blockKey(_ world: SIMD3<Float>) -> BlockKey {
         let inverse = 1 / (voxel * Float(blockSize))
         return BlockKey(
@@ -231,20 +238,27 @@ private final class TSDFVolume {
                 guard surface >= params.minRange, surface <= params.maxRange else { continue }
                 let sampleIndex = y * depth.width + x
                 let conf = Float(sampleIndex < confidence.count ? confidence[sampleIndex] : 0)
-                guard conf + 0.01 >= params.minConfidence else { continue }
+                guard conf >= 1 else { continue }
                 let signedDistance = surface - cameraDepth
+                let slot = pointer.advanced(by: Int(block.index) * 512 + local)
+                // A farther surface must not carve away a nearer one already stored here.
+                if signedDistance > params.trunc, slot.pointee.weight > 1, slot.pointee.sdf < 0.5 { continue }
                 guard signedDistance >= -params.trunc else { continue }
                 let tsdf = min(1, max(-1, signedDistance / params.trunc))
-                let sampleWeight = min(8, max(conf, 0.2) / max(surface * surface, 0.04))
-                let slot = pointer.advanced(by: Int(block.index) * 512 + local)
+                let confScale: Float = conf >= 2 ? 1 : 0.3
+                var sampleWeight = min(8, confScale / max(surface * surface, 0.04))
+                if let left = depthAt(depth, x - 1, y), let right = depthAt(depth, x + 1, y) {
+                    let slope = abs(right - left) * 0.5 * params.fx / max(surface, 0.05)
+                    if slope > 3.5 { sampleWeight *= 0.25 }
+                }
                 let previous = slot.pointee.weight
-                let updated = min(previous + sampleWeight, 48)
+                let blend = previous + sampleWeight
                 if previous <= 0.0001 {
                     slot.pointee.sdf = tsdf
                 } else {
-                    slot.pointee.sdf = (slot.pointee.sdf * previous + tsdf * sampleWeight) / updated
+                    slot.pointee.sdf = (slot.pointee.sdf * previous + tsdf * sampleWeight) / blend
                 }
-                slot.pointee.weight = updated
+                slot.pointee.weight = min(blend, 48)
             }
         }
     }

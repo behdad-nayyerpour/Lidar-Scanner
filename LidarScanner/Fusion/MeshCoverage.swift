@@ -19,11 +19,13 @@ enum MeshCoverage {
         guard !reference.positions.isEmpty else { return fused }
         guard !fused.positions.isEmpty else { return reference }
         var used: [SIMD3<Float>] = []
+        var usedVertex: [Int] = []
         var seen = Set<Int>()
         for index in fused.indices {
             let vertex = Int(index)
             guard vertex < fused.positions.count, seen.insert(vertex).inserted else { continue }
             used.append(fused.positions[vertex])
+            usedVertex.append(vertex)
         }
         let index = PointIndex(points: used, cell: max(tolerance, 0.01))
         var mesh = fused
@@ -36,29 +38,27 @@ enum MeshCoverage {
             let b = reference.positions[i1]
             let c = reference.positions[i2]
             let center = (a + b + c) / 3
-            let samples = [center, a, b, c]
-            let near = samples.reduce(0) { count, sample in
-                count + (index.distance(to: sample) <= tolerance ? 1 : 0)
-            }
-            // One stray vertex near the middle of a hole is not coverage. Most of the triangle has to sit on the fused surface.
-            if near >= 3 { continue }
+            // A parallel sheet a centimeter off the fused surface is not a hole. Only an opening
+            // whose center is farther than `tolerance` gets filled, and rim vertices snap onto the fused mesh.
+            if index.distance(to: center) <= tolerance { continue }
             let geometric = simd_cross(b - a, c - a)
             let authored = i0 < reference.normals.count ? reference.normals[i0] : geometric
             let flip = simd_length(authored) > 1e-4 && simd_dot(geometric, authored) < 0
-            let start = UInt32(mesh.positions.count)
-            if flip {
-                mesh.positions.append(a)
-                mesh.positions.append(c)
-                mesh.positions.append(b)
-            } else {
-                mesh.positions.append(a)
-                mesh.positions.append(b)
-                mesh.positions.append(c)
+            let corners = flip ? [a, c, b] : [a, b, c]
+            var ids: [UInt32] = []
+            for corner in corners {
+                if let hit = index.nearest(corner, within: tolerance), hit < usedVertex.count {
+                    ids.append(UInt32(usedVertex[hit]))
+                } else {
+                    mesh.positions.append(corner)
+                    ids.append(UInt32(mesh.positions.count - 1))
+                }
             }
-            mesh.indices.append(contentsOf: [start, start + 1, start + 2])
+            if Set(ids).count < 3 { continue }
+            mesh.indices.append(contentsOf: ids)
         }
         mesh.recomputeNormals()
-        return mesh.compacted()
+        return mesh.welded(cellSize: max(tolerance * 0.25, 0.004)).compacted()
     }
 
     private static func centers(of mesh: ScanMesh, limit: Int) -> [SIMD3<Float>] {
@@ -89,6 +89,30 @@ private struct PointIndex {
         for (index, point) in points.enumerated() {
             buckets[key(point), default: []].append(index)
         }
+    }
+
+    func nearest(_ point: SIMD3<Float>, within radius: Float) -> Int? {
+        let origin = key(point)
+        let reach = max(1, Int(ceil(radius / cell)))
+        var best = Float.greatestFiniteMagnitude
+        var hit: Int?
+        for z in -reach...reach {
+            for y in -reach...reach {
+                for x in -reach...reach {
+                    let bucket = SIMD3<Int32>(origin.x + Int32(x), origin.y + Int32(y), origin.z + Int32(z))
+                    guard let indices = buckets[bucket] else { continue }
+                    for index in indices {
+                        let distance = simd_distance(points[index], point)
+                        if distance < best {
+                            best = distance
+                            hit = index
+                        }
+                    }
+                }
+            }
+        }
+        guard let hit, best <= radius else { return nil }
+        return hit
     }
 
     func distance(to point: SIMD3<Float>) -> Float {

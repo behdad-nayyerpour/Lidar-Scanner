@@ -124,7 +124,7 @@ extension ScanMesh {
         return mesh
     }
 
-    func simplified(targetTriangles: Int) -> ScanMesh {
+    func simplified(targetTriangles: Int, maxError: Float = 0.02) -> ScanMesh {
         guard targetTriangles > 50, triangleCount > targetTriangles + 20 else { return self }
         var packed: [Float] = []
         packed.reserveCapacity(positions.count * 3)
@@ -136,7 +136,7 @@ extension ScanMesh {
         var native = NMMesh()
         let code: Int32 = packed.withUnsafeBufferPointer { positions in
             indices.withUnsafeBufferPointer { indices in
-                NMSimplify(positions.baseAddress, UInt32(self.positions.count), indices.baseAddress, UInt32(self.indices.count), UInt32(targetTriangles * 3), &native)
+                NMSimplify(positions.baseAddress, UInt32(self.positions.count), indices.baseAddress, UInt32(self.indices.count), UInt32(targetTriangles * 3), maxError, &native)
             }
         }
         defer { NMFreeMesh(&native) }

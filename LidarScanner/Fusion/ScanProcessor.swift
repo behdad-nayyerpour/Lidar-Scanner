@@ -28,7 +28,8 @@ enum ScanProcessor {
         var working = reference
         var replaced = false
         if settings.fuse, !frames.isEmpty {
-            let millimeters = FusionVoxel.millimeters(requested: settings.voxelMillimeters, frames: frames)
+            let range = FusionVoxel.medianDepth(directory: directory, frames: frames)
+            let millimeters = FusionVoxel.millimeters(requested: settings.voxelMillimeters, frames: frames, range: range)
             settings.voxelMillimeters = millimeters
             Log.scan.info("fusion voxel mm=\(millimeters, privacy: .public) frames=\(frames.count, privacy: .public)")
             let fused = TSDFFusion.fuse(
@@ -41,8 +42,9 @@ enum ScanProcessor {
             ) { fraction in
                 progress?(0.04 + 0.40 * fraction, L10n.qualityWorkingMesh)
             }
-            let tolerance = max(0.04, settings.voxelSize * 4)
-            let coverage = MeshCoverage.fraction(of: reference, near: fused, tolerance: tolerance)
+            let coverageTolerance = max(0.04, settings.voxelSize * 4)
+            let tolerance = max(0.012, settings.voxelSize * 4)
+            let coverage = MeshCoverage.fraction(of: reference, near: fused, tolerance: coverageTolerance)
             Log.scan.info("fusion coverage=\(coverage, privacy: .public) triangles=\(fused.triangleCount, privacy: .public)")
             if fused.triangleCount < 30 || coverage < 0.55 {
                 notice = L10n.qualityFellBack
@@ -65,7 +67,7 @@ enum ScanProcessor {
         }
         progress?(0.55, L10n.qualityStageAtlas)
         let textureStarted = CFAbsoluteTimeGetCurrent()
-        let tolerance = max(0.04, settings.voxelSize * 4)
+        let tolerance = max(0.012, settings.voxelSize * 4)
         guard let textured = AtlasTexturer.texture(
             mesh: working,
             directory: directory,
@@ -98,7 +100,7 @@ enum ScanProcessor {
         if settings.smoothIterations > 0 {
             working = working.taubinSmoothed(iterations: settings.smoothIterations)
         }
-        working = working.simplified(targetTriangles: settings.targetTriangles)
+        working = working.simplified(targetTriangles: settings.targetTriangles, maxError: max(settings.voxelSize, 0.002))
         let coveredBeforeFill = MeshCoverage.fraction(of: reference, near: working, tolerance: tolerance)
         working = MeshCoverage.fillingGaps(fused: working, reference: reference, tolerance: tolerance)
         return (working, coveredBeforeFill)

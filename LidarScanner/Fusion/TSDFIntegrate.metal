@@ -71,7 +71,6 @@ kernel void integrateTSDF(
     float surface = depthTex.sample(linear, uv).r;
     if (surface < params.minRange || surface > params.maxRange) { return; }
     float confidence = confidenceTex.sample(nearest, uv).r;
-    if (confidence + 0.01 < params.minConfidence) { return; }
 
     float depthL = depthTex.sample(nearest, uv - float2(1.0 / params.depthWidth, 0.0)).r;
     float depthR = depthTex.sample(nearest, uv + float2(1.0 / params.depthWidth, 0.0)).r;
@@ -79,21 +78,22 @@ kernel void integrateTSDF(
     float depthD = depthTex.sample(nearest, uv + float2(0.0, 1.0 / params.depthHeight)).r;
     float slopeX = abs(depthR - depthL) * 0.5 * params.fx / max(surface, 0.05);
     float slopeY = abs(depthD - depthU) * 0.5 * params.fy / max(surface, 0.05);
-    if (slopeX > 3.5 || slopeY > 3.5) { return; }
-
+    if (confidence < 1.0) { return; }
+    float grazing = max(slopeX, slopeY);
     float signedDistance = surface - cameraDepth;
-    if (signedDistance < -params.trunc) { return; }
-    float tsdf = clamp(signedDistance / params.trunc, -1.0, 1.0);
-    float sampleWeight = max(confidence, 0.2) / max(surface * surface, 0.04);
-    sampleWeight = min(sampleWeight, 8.0);
-
     uint index = uint(block.index) * 512u + gid.x;
     float previous = voxels[index].weight;
-    float updated = min(previous + sampleWeight, 48.0);
+    if (signedDistance > params.trunc && previous > 1.0 && voxels[index].sdf < 0.5) { return; }
+    if (signedDistance < -params.trunc) { return; }
+    float tsdf = clamp(signedDistance / params.trunc, -1.0, 1.0);
+    float confScale = confidence >= 2.0 ? 1.0 : 0.3;
+    float sampleWeight = min(confScale / max(surface * surface, 0.04), 8.0);
+    if (grazing > 3.5) { sampleWeight *= 0.25; }
+    float blend = previous + sampleWeight;
     if (previous <= 0.0001) {
         voxels[index].sdf = tsdf;
     } else {
-        voxels[index].sdf = (voxels[index].sdf * previous + tsdf * sampleWeight) / updated;
+        voxels[index].sdf = (voxels[index].sdf * previous + tsdf * sampleWeight) / blend;
     }
-    voxels[index].weight = updated;
+    voxels[index].weight = min(blend, 48.0);
 }
