@@ -35,16 +35,24 @@ final class DeskScanFusionTests: XCTestCase {
             progress: nil,
             useMetal: false
         )
-        mesh = mesh.simplified(targetTriangles: settings.targetTriangles, maxError: max(settings.voxelSize, 0.002))
         XCTAssertGreaterThan(mesh.triangleCount, 1000)
-
         let keyMin = SIMD3<Float>(0.03, -0.26, -0.29)
         let keyMax = SIMD3<Float>(0.47, -0.22, -0.09)
         var heights: [Float] = []
+        var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+        var high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+        for position in mesh.positions {
+            low = SIMD3(min(low.x, position.x), min(low.y, position.y), min(low.z, position.z))
+            high = SIMD3(max(high.x, position.x), max(high.y, position.y), max(high.z, position.z))
+            if inside(position, min: keyMin, max: keyMax) { heights.append(position.y) }
+        }
+        XCTAssertGreaterThan(heights.count, 50, "keyboard empty inside \(keyMin) \(keyMax); mesh \(low) \(high) voxel \(settings.voxelMillimeters)")
+        mesh = mesh.simplified(targetTriangles: settings.targetTriangles, maxError: max(settings.voxelSize, 0.002))
+        heights.removeAll(keepingCapacity: true)
         for position in mesh.positions where inside(position, min: keyMin, max: keyMax) {
             heights.append(position.y)
         }
-        XCTAssertGreaterThan(heights.count, 50, "keyboard region has no fused vertices")
+        XCTAssertGreaterThan(heights.count, 50, "keyboard removed by simplification")
         guard heights.count > 50 else { return }
         heights.sort()
         let gap = settings.voxelSize * 3

@@ -53,7 +53,9 @@ enum TSDFFusion {
         let volume = TSDFVolume(voxel: settings.voxelSize, truncation: settings.truncation, useMetal: useMetal)
         let usable = frames.filter { $0.depthWidth > 1 && $0.depthHeight > 1 }
         guard !usable.isEmpty else { return ScanMesh() }
-        for (index, frame) in usable.enumerated() {
+        // Nearer views first, so a desk fills the volume before a distant floor does.
+        let ordered = usable.sorted { nearer($0, directory: directory) < nearer($1, directory: directory) }
+        for (index, frame) in ordered.enumerated() {
             if signal?.isCancelled == true { break }
             guard let (depth, confidence) = try? KeyframeArchive.readDepth(at: KeyframeArchive.depthURL(in: directory, index: frame.index)) else {
                 continue
@@ -70,6 +72,22 @@ enum TSDFFusion {
             progress?(Double(index + 1) / Double(usable.count))
         }
         return volume.extract()
+    }
+
+    private static func nearer(_ frame: StoredKeyframe, directory: URL) -> Float {
+        guard let loaded = try? KeyframeArchive.readDepth(at: KeyframeArchive.depthURL(in: directory, index: frame.index)) else { return 99 }
+        let values = loaded.0.values
+        let step = max(1, values.count / 300)
+        var samples: [Float] = []
+        var index = 0
+        while index < values.count {
+            let value = values[index]
+            if value > 0.2, value < 5 { samples.append(value) }
+            index += step
+        }
+        guard !samples.isEmpty else { return 99 }
+        samples.sort()
+        return samples[samples.count / 2]
     }
 }
 
