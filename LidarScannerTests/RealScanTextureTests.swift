@@ -5,7 +5,15 @@ import simd
 /// A few frames from a real phone scan. Baking must sample the photos, not paint one flat color per triangle.
 final class RealScanTextureTests: XCTestCase {
     func testRealFramesStayPhotoConsistent() throws {
-        guard let folder = Bundle(for: RealScanTextureTests.self).url(forResource: "RealScan", withExtension: nil) else {
+        let bundle = Bundle(for: RealScanTextureTests.self)
+        let candidates = [
+            bundle.url(forResource: "RealScan", withExtension: nil),
+            bundle.resourceURL?.appendingPathComponent("RealScan"),
+            bundle.bundleURL.appendingPathComponent("RealScan")
+        ]
+        guard let folder = candidates.compactMap({ $0 }).first(where: {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("manifest.json").path)
+        }) else {
             XCTFail("Real scan fixture is missing")
             return
         }

@@ -80,6 +80,15 @@ targets:
     resources:
       - path: LidarScannerTests/Fixtures/RealScan
         type: folder
+    preBuildScripts:
+      - name: Copy real scan fixture
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          src="${SRCROOT}/LidarScannerTests/Fixtures/RealScan"
+          dest="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/RealScan"
+          mkdir -p "${dest}"
+          cp -R "${src}/." "${dest}/"
     dependencies:
       - target: LidarScanner
     settings:
