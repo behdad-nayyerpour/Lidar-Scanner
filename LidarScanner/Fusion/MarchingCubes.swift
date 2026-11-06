@@ -45,19 +45,26 @@ enum MarchingCubes {
                         // The last cell in a block reads the next voxel, which may live in a neighbor block.
                         var sdf = [Float](repeating: 1, count: 8)
                         var cube = 0
-                        var observed = true
+                        var sawFront = false
+                        var sawInside = false
                         for corner in 0..<8 {
                             let offset = corners[corner]
                             let sample = sample(baseX + x + offset.x, baseY + y + offset.y, baseZ + z + offset.z)
                             if sample.1 < 0.15 {
-                                observed = false
-                                break
+                                sdf[corner] = 1
+                                continue
                             }
                             sdf[corner] = sample.0
-                            if sample.0 < 0 { cube |= 1 << corner }
+                            if sample.0 < 0 {
+                                cube |= 1 << corner
+                                sawInside = true
+                            } else {
+                                sawFront = true
+                            }
                         }
-                        // Unobserved corners used to be treated as empty space, which meshed a second sheet behind every wall.
-                        guard observed, cube != 0, cube != 255 else { continue }
+                        // The band behind a surface is negative. An unseen corner is empty, which used to
+                        // grow a second sheet there. A real sheet still has a measured empty voxel in front.
+                        guard sawFront, sawInside, cube != 0, cube != 255 else { continue }
                         guard cube < MarchingCubesTables.edgeTable.count else { continue }
                         var edgeVertex = [Int](repeating: -1, count: 12)
                         let mask = MarchingCubesTables.edgeTable[cube]
