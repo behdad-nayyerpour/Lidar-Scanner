@@ -10,7 +10,7 @@ struct FusionSettings: Codable, Equatable {
     var textureSize: Int
     var fuse: Bool
 
-    var voxelSize: Float { max(0.004, voxelMillimeters / 1000) }
+    var voxelSize: Float { max(0.0015, voxelMillimeters / 1000) }
     var truncation: Float { voxelSize * 2.5 }
     var confidenceFloor: Float { Float(min(2, max(0, minConfidence))) }
 
@@ -86,9 +86,10 @@ enum FusionVoxel {
 
     static func medianDepth(directory: URL, frames: [StoredKeyframe]) -> Float {
         var samples: [Float] = []
-        for frame in frames.prefix(8) where frame.depthWidth > 1 {
+        let stride = max(1, frames.count / 12)
+        for (offset, frame) in frames.enumerated() where offset % stride == 0 && frame.depthWidth > 1 {
             guard let loaded = try? KeyframeArchive.readDepth(at: KeyframeArchive.depthURL(in: directory, index: frame.index)) else { continue }
-            let step = max(1, loaded.0.values.count / 500)
+            let step = max(1, loaded.0.values.count / 400)
             var index = 0
             while index < loaded.0.values.count {
                 let value = loaded.0.values[index]
@@ -98,6 +99,7 @@ enum FusionVoxel {
         }
         guard !samples.isEmpty else { return 0.6 }
         samples.sort()
-        return samples[samples.count / 2]
+        // The near subject, not the far floor, sets the voxel. A desk at 0.4 m stays near 2 mm.
+        return samples[samples.count / 4]
     }
 }
