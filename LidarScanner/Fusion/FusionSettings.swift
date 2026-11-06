@@ -70,6 +70,16 @@ struct FusionSettings: Codable, Equatable {
 }
 
 enum FusionVoxel {
+    static let maxBlocks = 32_000
+
+    /// Surface blocks have an 8x8 voxel footprint and need about two layers around the zero crossing.
+    /// Leave room for sparse boundaries instead of exhausting the volume on the first near wall.
+    static func budgetedMillimeters(detail: Float, surfaceArea: Float) -> Float {
+        guard surfaceArea.isFinite, surfaceArea > 0 else { return detail }
+        let budgetFloor = sqrt(surfaceArea / (32 * Float(maxBlocks) * 0.7)) * 1000
+        return max(detail, budgetFloor)
+    }
+
     /// Voxel size follows the depth pixel at the distance actually scanned. A desk at 0.4 m is about 2 mm.
     static func millimeters(requested: Float, frames: [StoredKeyframe], range: Float) -> Float {
         var footprints: [Float] = []

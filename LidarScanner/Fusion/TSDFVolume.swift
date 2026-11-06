@@ -96,7 +96,7 @@ private final class TSDFVolume {
     let voxel: Float
     let truncation: Float
     let blockSize = 8
-    let maxBlocks = 32_000
+    let maxBlocks = FusionVoxel.maxBlocks
     private var lookup: [BlockKey: Int] = [:]
     private var origins: [BlockKey] = []
     private var pointer: UnsafeMutablePointer<TSDFVoxel>

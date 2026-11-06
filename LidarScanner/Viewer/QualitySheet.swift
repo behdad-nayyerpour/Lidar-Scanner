@@ -22,7 +22,10 @@ struct QualitySheet: View {
     private var settings: FusionSettings {
         switch preset {
         case "fast":
-            return .fast
+            var fast = FusionSettings.fast
+            fast.maxRange = range
+            fast.minConfidence = confidence
+            return fast
         case "hd":
             var hd = FusionSettings.hd
             hd.maxRange = range

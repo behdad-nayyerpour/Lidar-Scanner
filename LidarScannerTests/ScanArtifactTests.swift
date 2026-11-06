@@ -2,6 +2,14 @@ import XCTest
 @testable import LidarScanner
 
 final class ScanArtifactTests: XCTestCase {
+    func testRoomResolutionFitsTheVolumeWithoutReducingSmallObjectDetail() {
+        XCTAssertEqual(FusionVoxel.budgetedMillimeters(detail: 2, surfaceArea: 0.5), 2, accuracy: 0.001)
+        let roomVoxel = FusionVoxel.budgetedMillimeters(detail: 2, surfaceArea: 100) / 1000
+        let estimatedBlocks = 100 / (32 * roomVoxel * roomVoxel)
+        XCTAssertLessThanOrEqual(estimatedBlocks, Float(FusionVoxel.maxBlocks) * 0.701)
+        XCTAssertGreaterThan(roomVoxel, 0.002)
+    }
+
     func testFailedCommitRestoresMeshAndRemovedTexture() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

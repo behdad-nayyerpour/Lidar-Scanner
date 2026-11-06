@@ -29,7 +29,9 @@ enum ScanProcessor {
         var replaced = false
         if settings.fuse, !frames.isEmpty {
             let range = FusionVoxel.medianDepth(directory: directory, frames: frames)
-            let millimeters = FusionVoxel.millimeters(requested: settings.voxelMillimeters, frames: frames, range: range)
+            let detail = settings.preset == "custom" ? settings.voxelMillimeters
+                : FusionVoxel.millimeters(requested: settings.voxelMillimeters, frames: frames, range: range)
+            let millimeters = FusionVoxel.budgetedMillimeters(detail: detail, surfaceArea: reference.surfaceArea())
             settings.voxelMillimeters = millimeters
             // Room scans must retain the requested range; near furniture must not clip distant walls.
             if objectCenter != nil {
