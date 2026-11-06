@@ -543,6 +543,7 @@ final class ScanLibrary: ObservableObject {
                 (paths.built, ply), (paths.mesh, ply),
                 (paths.uvs, uvData), (paths.texture, record.isColored ? texture : nil),
                 (paths.preview, previewData), (paths.thumbnail, thumbnail?.pngData()),
+                (paths.builtPreview, previewData),
                 (paths.meta, try JSONCoding.encoder.encode(record))
             ])
             if let index = records.firstIndex(where: { $0.id == id }) { records[index] = record }

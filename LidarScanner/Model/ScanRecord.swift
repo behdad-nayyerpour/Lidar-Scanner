@@ -196,6 +196,7 @@ struct ScanPaths {
     var mesh: URL { directory.appendingPathComponent("mesh.ply") }
     var original: URL { directory.appendingPathComponent("mesh.original.ply") }
     var built: URL { directory.appendingPathComponent("mesh.built.ply") }
+    var builtPreview: URL { directory.appendingPathComponent("preview.built.usdz") }
     var thumbnail: URL { directory.appendingPathComponent("thumbnail.png") }
     var preview: URL { directory.appendingPathComponent("preview.usdz") }
     var capture: URL { directory.appendingPathComponent("capture.usdz") }

@@ -281,6 +281,10 @@ struct ModelViewer: View {
     private var record: ScanRecord? { library.record(scanID) }
     private var quickLookURL: URL? {
         let paths = library.paths(for: scanID)
+        if record?.showingBuilt == true, paths.exists(paths.builtPreview) { return paths.builtPreview }
+        if record?.isProcessed == false, paths.exists(paths.capture) { return paths.capture }
+        // With Original selected, use its current mesh rather than a cached Built preview.
+        if record?.builtAvailable == true, record?.showingBuilt != true { return nil }
         if paths.exists(paths.preview) { return paths.preview }
         if paths.exists(paths.capture) { return paths.capture }
         return nil
