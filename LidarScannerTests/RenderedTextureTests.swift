@@ -24,7 +24,16 @@ final class RenderedTextureTests: XCTestCase {
 
         let usdz = folder.appendingPathComponent("model.usdz")
         try MeshExporter.usdzTextured(mesh: mesh, image: stored, to: usdz)
-        try check(render(scene: SCNScene(url: usdz)), name: "USDZ round trip atlas")
+        let exported = try SCNScene(url: usdz, options: nil)
+        let bounds = SceneFraming.bounds(of: exported)
+        XCTAssertEqual(bounds.size.x, 2, accuracy: 0.01)
+        XCTAssertEqual(bounds.size.y, 2, accuracy: 0.01)
+        // USD Preview Surface imports as a lit material. Isolate UV/image persistence from lighting,
+        // just as the app's photo viewer uses constant illumination for a captured photograph.
+        exported.rootNode.enumerateChildNodes { node, _ in
+            for material in node.geometry?.materials ?? [] { material.lightingModel = .constant }
+        }
+        try check(render(scene: exported), name: "USDZ round trip atlas")
     }
 
     func testLegacyBakedAtlasUsesTheSameSceneKitConversion() throws {
