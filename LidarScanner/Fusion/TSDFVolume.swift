@@ -138,7 +138,7 @@ private final class TSDFVolume {
                 if length > 0.05 {
                     let ray = direction / length
                     let behind = max(1, Int(ceil(truncation / voxel)))
-                    let ahead = behind * 4
+                    let ahead = behind * 2
                     for offset in -ahead...behind {
                         let sample = world + ray * (Float(offset) * voxel)
                         if let index = ensureBlock(containing: sample), seen.insert(index).inserted {

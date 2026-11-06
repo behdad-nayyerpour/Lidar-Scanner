@@ -23,7 +23,7 @@ final class DeskScanFusionTests: XCTestCase {
         var settings = FusionSettings.balanced
         let range = FusionVoxel.medianDepth(directory: folder, frames: frames)
         settings.voxelMillimeters = FusionVoxel.millimeters(requested: settings.voxelMillimeters, frames: frames, range: range)
-        settings.maxRange = 3
+        settings.maxRange = FusionVoxel.integrationRange(subject: range, requested: settings.maxRange)
         settings.minConfidence = 1
         var mesh = TSDFFusion.fuse(
             directory: folder,
@@ -45,6 +45,7 @@ final class DeskScanFusionTests: XCTestCase {
             heights.append(position.y)
         }
         XCTAssertGreaterThan(heights.count, 50, "keyboard region has no fused vertices")
+        guard heights.count > 50 else { return }
         heights.sort()
         let gap = settings.voxelSize * 3
         var layers = 1

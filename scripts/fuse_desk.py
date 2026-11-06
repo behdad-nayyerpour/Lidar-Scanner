@@ -168,7 +168,7 @@ def merge(keys, sdf, weight, new_keys, new_sdf, new_weight, protect):
 def integrate(frames, root, voxel):
     trunc = voxel * 2.5
     behind = max(1, int(np.ceil(trunc / voxel)))
-    ahead = behind * 4
+    ahead = behind * 2
     offsets = np.arange(-ahead, behind + 1, dtype=np.float64) * voxel
     keys = np.zeros(0, np.int64)
     sdf = np.zeros(0, np.float32)
@@ -185,7 +185,7 @@ def integrate(frames, root, voxel):
         u = xs + 0.5
         v = ys + 0.5
         z = depth
-        valid = (z >= 0.3) & (z <= 3) & (conf >= 1)
+        valid = (z >= 0.3) & (z <= 1.26) & (conf >= 1)
         slope_x = np.zeros_like(z)
         slope_y = np.zeros_like(z)
         slope_x[:, 1:-1] = np.abs(z[:, 2:] - z[:, :-2]) * 0.5 * fx / np.maximum(z[:, 1:-1], 0.05)

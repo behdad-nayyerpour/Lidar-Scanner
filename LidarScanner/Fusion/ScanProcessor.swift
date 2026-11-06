@@ -31,6 +31,7 @@ enum ScanProcessor {
             let range = FusionVoxel.medianDepth(directory: directory, frames: frames)
             let millimeters = FusionVoxel.millimeters(requested: settings.voxelMillimeters, frames: frames, range: range)
             settings.voxelMillimeters = millimeters
+            settings.maxRange = FusionVoxel.integrationRange(subject: range, requested: settings.maxRange)
             Log.scan.info("fusion voxel mm=\(millimeters, privacy: .public) frames=\(frames.count, privacy: .public)")
             let fused = TSDFFusion.fuse(
                 directory: directory,

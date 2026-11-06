@@ -102,4 +102,9 @@ enum FusionVoxel {
         // The near subject, not the far floor, sets the voxel. A desk at 0.4 m stays near 2 mm.
         return samples[samples.count / 4]
     }
+
+    /// A 2 mm desk must not spend the volume on a floor several meters away.
+    static func integrationRange(subject: Float, requested: Float) -> Float {
+        min(requested, max(1.2, subject * 3))
+    }
 }
