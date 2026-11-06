@@ -37,7 +37,12 @@ enum AtlasTexturer {
                 prepared = MeshCoverage.fillingGaps(fused: prepared, reference: reference, tolerance: fillTolerance)
             }
         }
-        let frames = spreadFrames(allFrames, limit: 48)
+        // Older archives contain depth-only records. Never select a pose without its own photo.
+        let photoFrames = allFrames.filter {
+            FileManager.default.fileExists(atPath: KeyframeArchive.colorURL(in: directory, index: $0.index).path)
+        }
+        guard !photoFrames.isEmpty else { return nil }
+        let frames = spreadFrames(photoFrames, limit: settings.preset == "hd" ? 64 : 48)
         progress?(0.08)
         let chosen = bestViewPerFace(mesh: prepared, directory: directory, frames: frames, settings: settings, signal: signal) { fraction in
             progress?(0.08 + 0.42 * fraction)
@@ -68,9 +73,7 @@ enum AtlasTexturer {
             guard index < frames.count, let image = KeyframeArchive.loadColor(in: directory, frame: frames[index], maxDimension: 1600) else { continue }
             colors[index] = image
         }
-        guard !colors.isEmpty else {
-            return (gridUnwrap(mesh), AtlasImage(width: 16, height: 16))
-        }
+        guard !colors.isEmpty else { return nil }
         var bounds: [Int: Bounds] = [:]
         var projected = [[SIMD2<Float>]](repeating: [], count: mesh.triangleCount)
         for triangle in 0..<mesh.triangleCount {
@@ -102,6 +105,7 @@ enum AtlasTexturer {
                 bounds[frameIndex] = box
             }
         }
+        if colors.count != used.count { return nil }
         let atlasSize = max(256, settings.textureSize)
         let charts = packCharts(bounds, colors: colors, atlas: atlasSize)
         var atlas = AtlasImage(width: atlasSize, height: atlasSize)
@@ -114,6 +118,8 @@ enum AtlasTexturer {
         out.normals.reserveCapacity(mesh.triangleCount * 3)
         out.uvs.reserveCapacity(mesh.triangleCount * 3)
         out.indices.reserveCapacity(mesh.triangleCount * 3)
+        // Reserve a neutral texel for unseen faces, rather than sampling an unrelated photo.
+        atlas.set(0, atlasSize - 1, SIMD3(repeating: 0.72))
         let chartByFrame = Dictionary(uniqueKeysWithValues: charts.map { ($0.frame, $0) })
         for triangle in 0..<mesh.triangleCount {
             let ids = (0..<3).map { Int(mesh.indices[triangle * 3 + $0]) }
@@ -122,6 +128,7 @@ enum AtlasTexturer {
             let pixels = projected[triangle]
             let chart = chartByFrame[frameIndex]
             let start = UInt32(out.positions.count)
+            out.faceClasses.append(triangle < mesh.faceClasses.count ? mesh.faceClasses[triangle] : 0)
             for corner in 0..<3 {
                 let index = ids[corner]
                 out.positions.append(mesh.positions[index])
@@ -222,10 +229,10 @@ enum AtlasTexturer {
     }
 
     private static func blit(_ color: RGBAImage, into atlas: inout AtlasImage, chart: PhotoChart) {
-        for y in 0..<chart.height {
-            for x in 0..<chart.width {
-                let u = chart.minU + (Float(x) + 0.5) / Float(chart.width) * chart.spanU
-                let v = chart.minV + (Float(y) + 0.5) / Float(chart.height) * chart.spanV
+        for y in -1...chart.height {
+            for x in -1...chart.width {
+                let u = chart.minU + Float(min(chart.width - 1, max(0, x))) / Float(max(chart.width - 1, 1)) * chart.spanU
+                let v = chart.minV + Float(min(chart.height - 1, max(0, y))) / Float(max(chart.height - 1, 1)) * chart.spanV
                 let sample = bilinear(color, min(u, Float(color.width - 1) - 0.01), min(v, Float(color.height - 1) - 0.01))
                     ?? nearestPixel(color, u, v)
                 atlas.set(chart.x + x, chart.y + y, sample)
@@ -614,6 +621,9 @@ enum AtlasTexturer {
         var projected: [SIMD2<Float>] = []
         for point in points {
             guard let hit = CameraProjection.pixel(world: point, viewMatrix: frame.viewMatrix, fx: frame.fx, fy: frame.fy, cx: frame.cx, cy: frame.cy) else { return nil }
+            guard hit.pixel.x >= 1, hit.pixel.y >= 1,
+                  hit.pixel.x < Float(frame.width - 1), hit.pixel.y < Float(frame.height - 1) else { return nil }
+            if lidarOccludes(pixel: hit.pixel, depth: hit.depth, frame: frame, lidar: lidar, relaxed: relaxed) { return nil }
             projected.append(hit.pixel)
         }
         if projected.count == 3 {
@@ -679,9 +689,10 @@ enum AtlasTexturer {
         let x = min(lidar.width - 1, max(0, Int(pixel.x * Float(lidar.width) / Float(frame.width))))
         let y = min(lidar.height - 1, max(0, Int(pixel.y * Float(lidar.height) / Float(frame.height))))
         let nearest = lidar.values[y * lidar.width + x]
-        guard nearest > 0.2 else { return false }
-        let slack = max(relaxed ? 0.45 : 0.25, depth * (relaxed ? 0.25 : 0.15))
-        return depth > nearest + slack
+        guard nearest.isFinite, nearest > 0.05 else { return true }
+        let slack = max(relaxed ? 0.10 : 0.05, depth * (relaxed ? 0.04 : 0.025))
+        // Agreement must be symmetric: a foreground face must not borrow a background photo either.
+        return abs(depth - nearest) > slack
     }
 
     private static func paintTriangle(image: inout AtlasImage, world: [SIMD3<Float>], uv: [SIMD2<Float>], frame: StoredKeyframe, color: RGBAImage) {

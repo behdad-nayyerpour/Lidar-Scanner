@@ -286,16 +286,14 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
                 mode: mode,
                 name: name,
                 root: root,
-                keyframeDirectory: recorder.handoff(),
+                keyframeDirectory: try recorder.snapshotDirectory(),
                 objectCenter: objectCenter,
                 objectRadius: mode == .objectLidar ? objectRadius : 0
             )
             Log.scan.info("finish total ms=\(ScanTiming.milliseconds(since: started), privacy: .public)")
             let previewURL = ScanPaths(directory: root.appendingPathComponent(saved.record.id.uuidString, isDirectory: true)).preview
-            DispatchQueue.global(qos: .utility).async {
-                let previewStarted = CFAbsoluteTimeGetCurrent()
+            if !signal.isCancelled {
                 try? MeshExporter.usdz(mesh: mesh, baked: nil, to: previewURL, allowBake: false)
-                Log.scan.info("preview usdz ms=\(ScanTiming.milliseconds(since: previewStarted), privacy: .public)")
             }
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -385,6 +383,9 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         }
         config.planeDetection = [.horizontal, .vertical]
         config.isAutoFocusEnabled = true
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            config.frameSemantics.insert(.sceneDepth)
+        }
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
             config.frameSemantics.insert(.smoothedSceneDepth)
         } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
@@ -507,7 +508,7 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         let position = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         keyframes.consider(frame)
         if isRecording, !isPaused {
-            recorder.consider(frame, maxRange: maxRange)
+            recorder.consider(frame, maxRange: maxRange, minConfidence: depthConfidence)
         }
         DispatchQueue.main.async { [weak self] in
             self?.ingest(position: position, light: light, tracking: tracking, timestamp: timestamp)

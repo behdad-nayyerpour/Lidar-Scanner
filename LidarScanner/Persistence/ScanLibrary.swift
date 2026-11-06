@@ -20,9 +20,9 @@ final class ScanLibrary: ObservableObject {
     let root: URL
     private let fileManager = FileManager.default
 
-    init() {
+    init(root directory: URL? = nil) {
         let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        root = documents.appendingPathComponent("Scans", isDirectory: true)
+        root = directory ?? documents.appendingPathComponent("Scans", isDirectory: true)
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         reload()
     }
@@ -173,6 +173,8 @@ final class ScanLibrary: ObservableObject {
     }
 
     func replaceMesh(id: UUID, mesh: ScanMesh) throws {
+        if colorJob?.scanID == id { cancelAddingColor(notify: false) }
+        if refineJob?.scanID == id { cancelRefinement(notify: false) }
         guard var record = record(id) else { return }
         let paths = paths(for: id)
         if !paths.exists(paths.original), paths.exists(paths.mesh) {
@@ -180,8 +182,7 @@ final class ScanLibrary: ObservableObject {
         }
         let ply = MeshIO.encode(mesh)
         try ply.write(to: paths.mesh, options: .atomic)
-        try? fileManager.removeItem(at: paths.uvs)
-        try? fileManager.removeItem(at: paths.texture)
+        // Atlas sidecars belong to the saved Built version. Edited meshes do not use them.
         try? MeshExporter.usdz(mesh: mesh, baked: TextureBaker.bake(mesh), to: paths.preview)
         if let image = ThumbnailRenderer.image(mesh: mesh) {
             try? image.pngData()?.write(to: paths.thumbnail, options: .atomic)
@@ -194,11 +195,14 @@ final class ScanLibrary: ObservableObject {
         record.boundsMin = [bounds.min.x, bounds.min.y, bounds.min.z]
         record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
         record.isProcessed = true
+        record.showingBuilt = false
         record.updatedAt = Date()
         try write(record)
     }
 
     func revert(id: UUID) throws {
+        if colorJob?.scanID == id { cancelAddingColor(notify: false) }
+        if refineJob?.scanID == id { cancelRefinement(notify: false) }
         guard var record = record(id) else { return }
         let paths = paths(for: id)
         guard paths.exists(paths.original) else { return }
@@ -223,6 +227,7 @@ final class ScanLibrary: ObservableObject {
         record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
         record.isProcessed = false
         record.isColored = false
+        record.showingBuilt = false
         record.updatedAt = Date()
         try write(record)
     }
@@ -252,7 +257,7 @@ final class ScanLibrary: ObservableObject {
     }
 
     func startAddingColor(to id: UUID) {
-        guard colorJob == nil else {
+        guard colorJob == nil, refineJob == nil else {
             colorNotice = L10n.colorBusy
             return
         }
@@ -392,6 +397,7 @@ final class ScanLibrary: ObservableObject {
         record.boundsMin = [bounds.min.x, bounds.min.y, bounds.min.z]
         record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
         record.isColored = coloredVertices > 0
+        record.showingBuilt = false
         record.updatedAt = Date()
         try? write(record)
         colorJob = nil
@@ -403,7 +409,7 @@ final class ScanLibrary: ObservableObject {
     }
 
     func startRefinement(id: UUID, settings: FusionSettings) {
-        guard refineJob == nil else {
+        guard refineJob == nil, colorJob == nil else {
             colorNotice = L10n.colorBusy
             return
         }
@@ -447,6 +453,32 @@ final class ScanLibrary: ObservableObject {
                     }
                 }
             }
+            guard !signal.isCancelled else { return }
+            guard !result.mesh.isEmpty else {
+                Task { @MainActor [weak self] in
+                    guard let self, generation == self.refineGeneration else { return }
+                    self.refineJob = nil
+                    self.colorNotice = L10n.colorFailed
+                }
+                return
+            }
+            let previewFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("usdz")
+            defer { try? FileManager.default.removeItem(at: previewFile) }
+            do {
+                if let image = result.texture {
+                    try MeshExporter.usdzTextured(mesh: result.mesh, image: image, to: previewFile)
+                } else {
+                    try MeshExporter.usdz(mesh: result.mesh, baked: nil, to: previewFile, allowBake: false)
+                }
+            } catch {
+                Task { @MainActor [weak self] in
+                    guard let self, generation == self.refineGeneration else { return }
+                    self.refineJob = nil
+                    self.colorNotice = L10n.colorFailed
+                }
+                return
+            }
+            let previewData = try? Data(contentsOf: previewFile)
             let ply = MeshIO.encode(result.mesh)
             let jpeg = result.texture?.jpegData(compressionQuality: 0.86)
             let thumbnail = result.texture == nil
@@ -459,6 +491,7 @@ final class ScanLibrary: ObservableObject {
                     mesh: result.mesh,
                     ply: ply,
                     texture: jpeg,
+                    previewData: previewData,
                     thumbnail: thumbnail,
                     cancelled: signal.isCancelled,
                     notice: result.notice
@@ -480,6 +513,7 @@ final class ScanLibrary: ObservableObject {
         mesh: ScanMesh,
         ply: Data,
         texture: Data?,
+        previewData: Data?,
         thumbnail: UIImage?,
         cancelled: Bool,
         notice: String?
@@ -491,51 +525,36 @@ final class ScanLibrary: ObservableObject {
             return
         }
         let paths = paths(for: id)
-        do {
-            try ply.write(to: paths.built, options: .atomic)
-            try ply.write(to: paths.mesh, options: .atomic)
-            if mesh.uvs.count == mesh.positions.count {
-                try? UVFile.write(mesh.uvs, to: paths.uvs)
-            }
-            if let texture {
-                try? texture.write(to: paths.texture, options: .atomic)
-                record.isColored = true
-            }
-            if let png = thumbnail?.pngData() {
-                try? png.write(to: paths.thumbnail, options: .atomic)
-                thumbnails[id] = thumbnail
-            }
-            let preview = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("usdz")
-            if let texture, let image = UIImage(data: texture) {
-                try? MeshExporter.usdzTextured(mesh: mesh, image: image, to: preview)
-            } else {
-                try? MeshExporter.usdz(mesh: mesh, baked: nil, to: preview, allowBake: false)
-            }
-            if FileManager.default.fileExists(atPath: preview.path) {
-                if paths.exists(paths.preview) { try? fileManager.removeItem(at: paths.preview) }
-                try? fileManager.moveItem(at: preview, to: paths.preview)
-            }
-        } catch {
-            refineJob = nil
-            colorNotice = L10n.colorFailed
-            return
-        }
         let bounds = mesh.boundingBox()
         record.vertexCount = mesh.positions.count
         record.triangleCount = mesh.triangleCount
         record.surfaceArea = Double(mesh.surfaceArea())
         record.boundsMin = [bounds.min.x, bounds.min.y, bounds.min.z]
         record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
+        record.isColored = texture != nil && mesh.uvs.count == mesh.positions.count
         record.qualityApplied = true
         record.isProcessed = true
         record.builtAvailable = true
         record.showingBuilt = true
         record.updatedAt = Date()
-        try? write(record)
-        refineJob = nil
-        if let notice {
-            colorNotice = notice
+        do {
+            let uvData = record.isColored ? UVFile.encode(mesh.uvs) : nil
+            try ScanArtifactTransaction.replace([
+                (paths.built, ply), (paths.mesh, ply),
+                (paths.uvs, uvData), (paths.texture, record.isColored ? texture : nil),
+                (paths.preview, previewData), (paths.thumbnail, thumbnail?.pngData()),
+                (paths.builtPreview, previewData),
+                (paths.meta, try JSONCoding.encoder.encode(record))
+            ])
+            if let index = records.firstIndex(where: { $0.id == id }) { records[index] = record }
+            thumbnails[id] = thumbnail
+        } catch {
+            refineJob = nil
+            colorNotice = L10n.colorFailed
+            return
         }
+        refineJob = nil
+        if let notice { colorNotice = notice }
     }
 
     func showOriginalMesh(id: UUID) throws {
@@ -547,6 +566,8 @@ final class ScanLibrary: ObservableObject {
     }
 
     private func activate(id: UUID, built: Bool) throws {
+        if colorJob?.scanID == id { cancelAddingColor(notify: false) }
+        if refineJob?.scanID == id { cancelRefinement(notify: false) }
         guard var record = record(id) else { return }
         let paths = paths(for: id)
         let source = built ? paths.built : paths.original
@@ -563,6 +584,7 @@ final class ScanLibrary: ObservableObject {
             record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
         }
         record.showingBuilt = built
+        record.isProcessed = built
         record.updatedAt = Date()
         try write(record)
     }
@@ -609,6 +631,10 @@ enum GeometryArchive {
         let directory = root.appendingPathComponent(id.uuidString, isDirectory: true)
         let paths = ScanPaths(directory: directory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var committed = false
+        defer {
+            if !committed { try? FileManager.default.removeItem(at: directory) }
+        }
         let ply = MeshIO.encode(mesh)
         try ply.write(to: paths.mesh, options: .atomic)
         try ply.write(to: paths.original, options: .atomic)
@@ -631,7 +657,7 @@ enum GeometryArchive {
             if FileManager.default.fileExists(atPath: paths.frames.path) {
                 try? FileManager.default.removeItem(at: paths.frames)
             }
-            try? FileManager.default.moveItem(at: keyframeDirectory, to: paths.frames)
+            try FileManager.default.copyItem(at: keyframeDirectory, to: paths.frames)
             storedKeyframes = FileManager.default.fileExists(atPath: KeyframeArchive.manifestURL(in: paths.frames).path)
         }
         let now = Date()
@@ -658,6 +684,7 @@ enum GeometryArchive {
         )
         let meta = try JSONCoding.encoder.encode(record)
         try meta.write(to: paths.meta, options: .atomic)
+        committed = true
         Log.scan.info("geometrySave vertices=\(mesh.positions.count, privacy: .public) triangles=\(mesh.triangleCount, privacy: .public) frames=\(frames.count, privacy: .public) ms=\(ScanTiming.milliseconds(since: started), privacy: .public)")
         return (record, thumbnail)
     }

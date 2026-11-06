@@ -76,7 +76,12 @@ enum KeyframeArchive {
 
     static func readManifest(in directory: URL) throws -> [StoredKeyframe] {
         let data = try Data(contentsOf: manifestURL(in: directory))
-        return try JSONCoding.decoder.decode(KeyframeManifest.self, from: data).frames
+        let frames = try JSONCoding.decoder.decode(KeyframeManifest.self, from: data).frames
+        // Old recorder versions could reuse an index while the image writer was busy.
+        // The file belongs to the last writer, so keep only that writer's camera pose.
+        var latest: [Int: StoredKeyframe] = [:]
+        for frame in frames { latest[frame.index] = frame }
+        return latest.values.sorted { $0.timestamp < $1.timestamp }
     }
 
     static func writeDepth(_ depth: DepthImage, confidence: [UInt8], to url: URL) throws {
