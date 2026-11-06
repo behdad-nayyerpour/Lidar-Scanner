@@ -39,6 +39,15 @@ jobs:
       - name: Fusion and projection self-test
         run: bash scripts/run-fusion-tests.sh
 
+      - name: Upload test diagnostics and rendered attachments
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LidarScanner-test-results
+          path: dist/Tests.xcresult
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Generate project, build, and package unsigned IPA
         run: bash scripts/build-unsigned-ipa.sh
 

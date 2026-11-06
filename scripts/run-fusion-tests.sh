@@ -29,11 +29,17 @@ PY
 )"
 
 echo "Testing on simulator ${UDID}"
+mkdir -p "$ROOT/dist"
 xcodebuild test \
   -project "$ROOT/LidarScanner.xcodeproj" \
   -scheme LidarScanner \
   -destination "id=${UDID}" \
   -only-testing:LidarScannerTests \
+  -parallel-testing-enabled NO \
+  -test-timeouts-enabled YES \
+  -default-test-execution-time-allowance 120 \
+  -maximum-test-execution-time-allowance 120 \
+  -resultBundlePath "$ROOT/dist/Tests.xcresult" \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
   CODE_SIGN_IDENTITY="" \

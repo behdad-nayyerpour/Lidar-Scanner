@@ -156,13 +156,13 @@ extension ScanMesh {
         let sources = [
             SCNGeometrySource(data: Packed.float3Data(positions), semantic: .vertex, vectorCount: positions.count, usesFloatComponents: true, componentsPerVector: 3, bytesPerComponent: 4, dataOffset: 0, dataStride: 12),
             SCNGeometrySource(data: Packed.float3Data(normals), semantic: .normal, vectorCount: normals.count, usesFloatComponents: true, componentsPerVector: 3, bytesPerComponent: 4, dataOffset: 0, dataStride: 12),
-            SCNGeometrySource(data: Packed.float2Data(uvs), semantic: .texcoord, vectorCount: uvs.count, usesFloatComponents: true, componentsPerVector: 2, bytesPerComponent: 4, dataOffset: 0, dataStride: 8)
+            SCNGeometrySource(data: Packed.sceneKitTexcoordData(uvs), semantic: .texcoord, vectorCount: uvs.count, usesFloatComponents: true, componentsPerVector: 2, bytesPerComponent: 4, dataOffset: 0, dataStride: 8)
         ]
         let element = SCNGeometryElement(data: Packed.indexData(indices), primitiveType: .triangles, primitiveCount: indices.count / 3, bytesPerIndex: 4)
         let geometry = SCNGeometry(sources: sources, elements: [element])
         let material = SCNMaterial()
         material.lightingModel = .constant
-        // Atlas memory row 0 is the top of the photo. Stored UV v = 1 addresses that row, which is SceneKit's top.
+        // The texcoord source converts the stored bottom-origin atlas UVs to SceneKit's image sampler.
         material.diffuse.contents = image
         material.diffuse.wrapS = .clamp
         material.diffuse.wrapT = .clamp
@@ -200,7 +200,7 @@ extension BakedTexture {
                 dataStride: 12
             ),
             SCNGeometrySource(
-                data: Packed.float2Data(uvs),
+                data: Packed.sceneKitTexcoordData(uvs),
                 semantic: .texcoord,
                 vectorCount: uvs.count,
                 usesFloatComponents: true,

@@ -52,7 +52,7 @@ enum ScanProcessor {
             let tolerance = max(0.012, settings.voxelSize * 4)
             let coverage = MeshCoverage.fraction(of: reference, near: fused, tolerance: coverageTolerance)
             Log.scan.info("fusion coverage=\(coverage, privacy: .public) triangles=\(fused.triangleCount, privacy: .public)")
-            if fused.triangleCount < 30 || coverage < 0.55 {
+            if !canUseFusion(fused, reference: reference, tolerance: coverageTolerance, referenceCoverage: coverage) {
                 notice = L10n.qualityFellBack
                 working = reference
             } else {
@@ -110,6 +110,16 @@ enum ScanProcessor {
         let coveredBeforeFill = MeshCoverage.fraction(of: reference, near: working, tolerance: tolerance)
         working = MeshCoverage.fillingGaps(fused: working, reference: reference, tolerance: tolerance)
         return (working, coveredBeforeFill)
+    }
+
+    /// A partial capture can refine a real subset of the original mesh. Low total coverage alone
+    /// must not discard that work; verify the fused subset aligns before filling the missing regions.
+    static func canUseFusion(_ fused: ScanMesh, reference: ScanMesh, tolerance: Float, referenceCoverage: Float? = nil) -> Bool {
+        guard fused.triangleCount >= 30 else { return false }
+        if reference.isEmpty { return true }
+        let coverage = referenceCoverage ?? MeshCoverage.fraction(of: reference, near: fused, tolerance: tolerance)
+        if coverage >= 0.55 { return true }
+        return MeshCoverage.fraction(of: fused, near: reference, tolerance: tolerance) >= 0.8
     }
 }
 

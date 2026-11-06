@@ -5,6 +5,7 @@ import UIKit
 @testable import LidarScanner
 
 final class RenderedTextureTests: XCTestCase {
+    @MainActor
     func testSceneKitDisplaysStoredAtlasInTheCorrectQuadrants() throws {
         let mesh = quad()
         let atlas = image()
@@ -16,6 +17,25 @@ final class RenderedTextureTests: XCTestCase {
         try XCTUnwrap(atlas.jpegData(compressionQuality: 0.86)).write(to: textureURL)
         let stored = try XCTUnwrap(UIImage(contentsOfFile: textureURL.path))
         try check(render(geometry: XCTUnwrap(mesh.texturedGeometry(image: stored))), name: "Stored JPEG atlas")
+
+        let viewer = ViewerModel()
+        viewer.show(mesh: mesh, colored: true, texture: stored)
+        try check(render(scene: XCTUnwrap(viewer.sceneView.scene)), name: "App viewer atlas")
+
+        let usdz = folder.appendingPathComponent("model.usdz")
+        try MeshExporter.usdzTextured(mesh: mesh, image: stored, to: usdz)
+        try check(render(scene: SCNScene(url: usdz)), name: "USDZ round trip atlas")
+    }
+
+    func testLegacyBakedAtlasUsesTheSameSceneKitConversion() throws {
+        let mesh = quad()
+        let cg = try XCTUnwrap(image().cgImage)
+        let pixels = try XCTUnwrap(cg.dataProvider?.data) as Data
+        let baked = BakedTexture(positions: mesh.positions, normals: mesh.normals, uvs: mesh.uvs,
+                                indices: mesh.indices, rgba: [UInt8](pixels), size: 64)
+        let geometry = try XCTUnwrap(baked.makeTexturedGeometry())
+        geometry.firstMaterial?.lightingModel = .constant
+        try check(render(geometry: geometry), name: "Legacy color atlas")
     }
 
     private func quad() -> ScanMesh {
@@ -43,6 +63,10 @@ final class RenderedTextureTests: XCTestCase {
     private func render(geometry: SCNGeometry) throws -> UIImage {
         let scene = SCNScene()
         scene.rootNode.addChildNode(SCNNode(geometry: geometry))
+        return try render(scene: scene)
+    }
+
+    private func render(scene: SCNScene) throws -> UIImage {
         let camera = SCNNode()
         camera.camera = SCNCamera()
         camera.camera?.usesOrthographicProjection = true

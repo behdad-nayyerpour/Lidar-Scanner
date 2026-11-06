@@ -37,7 +37,7 @@ struct BakedTexture: Sendable {
 
 enum TextureBaker {
     /// Packs each triangle into its own atlas cell and bakes vertex colors into that cell.
-    /// UVs use the SceneKit / OBJ convention: V = 0 at the bottom of the image.
+    /// Stored UVs use the OBJ convention: V = 0 at the bottom. SceneKit converts them when building geometry.
     static func bake(
         _ mesh: ScanMesh,
         shouldStop: (@Sendable () -> Bool)? = nil,
