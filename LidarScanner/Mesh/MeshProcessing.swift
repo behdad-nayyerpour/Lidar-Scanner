@@ -141,7 +141,7 @@ extension ScanMesh {
         }
         defer { NMFreeMesh(&native) }
         guard code == 0, native.vertexCount > 0, native.indexCount >= 3, let positions = native.positions, let indices = native.indices else {
-            return decimated(targetRatio: Float(targetTriangles) / Float(max(triangleCount, 1))).withoutSlivers(minAltitude: maxError)
+            return decimated(targetRatio: Float(targetTriangles) / Float(max(triangleCount, 1))).withoutSlivers(minAltitude: maxError * 2)
         }
         var mesh = ScanMesh()
         for index in 0..<Int(native.vertexCount) {
@@ -151,7 +151,7 @@ extension ScanMesh {
             mesh.indices.append(indices[index])
         }
         mesh.recomputeNormals()
-        return mesh.withoutSlivers(minAltitude: maxError).compacted()
+        return mesh.withoutSlivers(minAltitude: maxError * 2).compacted()
     }
 
     /// Drops long needles left on a flat surface. A wide triangle on the keyboard stays.
