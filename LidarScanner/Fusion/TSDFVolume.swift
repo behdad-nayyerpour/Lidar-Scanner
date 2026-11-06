@@ -246,7 +246,7 @@ private final class TSDFVolume {
                 guard signedDistance >= -params.trunc else { continue }
                 let tsdf = min(1, max(-1, signedDistance / params.trunc))
                 let confScale: Float = conf >= 2 ? 1 : 0.3
-                var sampleWeight = min(8, confScale / max(surface * surface, 0.04))
+                var sampleWeight = min(8, confScale * 2 / max(surface * surface, 0.04))
                 if let left = depthAt(depth, x - 1, y), let right = depthAt(depth, x + 1, y) {
                     let slope = abs(right - left) * 0.5 * params.fx / max(surface, 0.05)
                     if slope > 3.5 { sampleWeight *= 0.25 }

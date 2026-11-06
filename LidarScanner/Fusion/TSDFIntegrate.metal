@@ -87,7 +87,7 @@ kernel void integrateTSDF(
     if (signedDistance < -params.trunc) { return; }
     float tsdf = clamp(signedDistance / params.trunc, -1.0, 1.0);
     float confScale = confidence >= 2.0 ? 1.0 : 0.3;
-    float sampleWeight = min(confScale / max(surface * surface, 0.04), 8.0);
+    float sampleWeight = min(confScale * 2.0 / max(surface * surface, 0.04), 8.0);
     if (grazing > 3.5) { sampleWeight *= 0.25; }
     float blend = previous + sampleWeight;
     if (previous <= 0.0001) {
