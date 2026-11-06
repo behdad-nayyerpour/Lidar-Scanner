@@ -99,7 +99,7 @@ enum PixelSampler {
         return RGBAImage(rgba: rgba, width: width, height: height, exposureScale: exposureScale(rgba, width: width, height: height))
     }
 
-    static func depthImage(from depthData: ARDepthData?, maxDimension: Int) -> DepthImage? {
+    static func depthImage(from depthData: ARDepthData?, maxDimension: Int, minConfidence: UInt8 = 1) -> DepthImage? {
         guard let depthData else { return nil }
         let pixelBuffer = depthData.depthMap
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
@@ -136,7 +136,7 @@ enum PixelSampler {
                 if let confidence, confidenceStride > 0, confidenceWidth > 0, confidenceHeight > 0 {
                     let cx = min(confidenceWidth - 1, sx * confidenceWidth / sourceWidth)
                     let cy = min(confidenceHeight - 1, sy * confidenceHeight / sourceHeight)
-                    if confidence[cy * confidenceStride + cx] == 0 { continue }
+                    if confidence[cy * confidenceStride + cx] < minConfidence { continue }
                 }
                 let meters = depths[sy * stride + sx]
                 if meters.isFinite, meters > 0.05 {

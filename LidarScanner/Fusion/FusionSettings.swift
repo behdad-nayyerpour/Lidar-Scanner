@@ -38,9 +38,9 @@ struct FusionSettings: Codable, Equatable {
         voxelMillimeters: 10,
         maxRange: 3,
         minConfidence: 2,
-        smoothIterations: 4,
-        targetTriangles: 48_000,
-        textureSize: 2048,
+        smoothIterations: 2,
+        targetTriangles: 80_000,
+        textureSize: 4096,
         fuse: true
     )
 
@@ -49,8 +49,8 @@ struct FusionSettings: Codable, Equatable {
         voxelMillimeters: 10,
         maxRange: 3,
         minConfidence: 2,
-        smoothIterations: 4,
-        targetTriangles: 80_000,
+        smoothIterations: 2,
+        targetTriangles: 120_000,
         textureSize: 4096,
         fuse: true
     )

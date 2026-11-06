@@ -54,7 +54,8 @@ enum TSDFFusion {
         let usable = frames.filter { $0.depthWidth > 1 && $0.depthHeight > 1 }
         guard !usable.isEmpty else { return ScanMesh() }
         // Nearer views first, so a desk fills the volume before a distant floor does.
-        let ordered = usable.sorted { nearer($0, directory: directory) < nearer($1, directory: directory) }
+        let ordered = usable.map { ($0, nearer($0, directory: directory)) }
+            .sorted { $0.1 < $1.1 }.map { $0.0 }
         for (index, frame) in ordered.enumerated() {
             if signal?.isCancelled == true { break }
             guard let (depth, confidence) = try? KeyframeArchive.readDepth(at: KeyframeArchive.depthURL(in: directory, index: frame.index)) else {
@@ -139,7 +140,8 @@ private final class TSDFVolume {
             let y = pixel / depth.width
             let meters = depth.values[pixel]
             let conf = pixel < confidence.count ? confidence[pixel] : 2
-            if meters > 0.05, conf >= 1 {
+            if meters.isFinite, meters >= 0.3, meters <= settings.maxRange,
+               Float(conf) >= settings.confidenceFloor {
                 let world = CameraProjection.worldPoint(
                     u: (Float(x) + 0.5) / scaleX,
                     v: (Float(y) + 0.5) / scaleY,
@@ -150,6 +152,11 @@ private final class TSDFVolume {
                     cy: frame.cy,
                     cameraToWorld: frame.cameraToWorld
                 )
+                if let center = objectCenter, objectRadius > 0,
+                   simd_distance(world, center) > objectRadius + truncation {
+                    pixel += step
+                    continue
+                }
                 let origin = frame.cameraPosition
                 let direction = world - origin
                 let length = simd_length(direction)

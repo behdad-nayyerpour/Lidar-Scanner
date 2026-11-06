@@ -15,7 +15,8 @@ final class KeyframeRecorder: @unchecked Sendable {
     private var frames: [StoredKeyframe] = []
     private var directory: URL
     private let maxFrames = 400
-    private var lastColor: TimeInterval = 0
+    private var nextIndex = 1
+    private var pending = 0
     var movingTooFast = false
 
     init() {
@@ -28,7 +29,7 @@ final class KeyframeRecorder: @unchecked Sendable {
         lock.lock()
         frames.removeAll()
         lastAccepted = 0
-        lastColor = 0
+        nextIndex = 1
         hasPose = false
         movingTooFast = false
         let old = directory
@@ -44,16 +45,16 @@ final class KeyframeRecorder: @unchecked Sendable {
         lock.unlock()
     }
 
-    func consider(_ frame: ARFrame, maxRange: Float) {
+    func consider(_ frame: ARFrame, maxRange: Float, minConfidence: Int = 2) {
         lock.lock()
-        let recording = accepting && frames.count < maxFrames
+        let recording = accepting && frames.count + pending < maxFrames && pending < 2
         let previousTime = lastAccepted
         let previous = lastTransform
         let known = hasPose
         lock.unlock()
         guard recording else { return }
         let timestamp = frame.timestamp
-        if previousTime > 0, timestamp - previousTime < 0.12 { return }
+        if previousTime > 0, timestamp - previousTime < 0.25 { return }
         guard case .normal = frame.camera.trackingState else { return }
 
         let transform = frame.camera.transform
@@ -73,36 +74,59 @@ final class KeyframeRecorder: @unchecked Sendable {
         let blur = Self.blurScore(pixelBuffer)
         if blur < 18 { return }
         guard let colorCopy = PixelBufferCopy.copy(pixelBuffer) else { return }
-        let depthSource = frame.smoothedSceneDepth ?? frame.sceneDepth
-        let depthImage = PixelSampler.depthImage(from: depthSource, maxDimension: 256)
+        // Use depth synchronized with this RGB frame; temporal smoothing can trail camera motion.
+        let depthSource = frame.sceneDepth ?? frame.smoothedSceneDepth
+        var depthImage = PixelSampler.depthImage(from: depthSource, maxDimension: 256, minConfidence: UInt8(clamping: minConfidence))
         var confidence = [UInt8]()
         if let depthImage, let map = depthSource?.confidenceMap {
             confidence = Self.copyConfidence(map, width: depthImage.width, height: depthImage.height, sourceWidth: CVPixelBufferGetWidth(depthSource?.depthMap ?? map), sourceHeight: CVPixelBufferGetHeight(depthSource?.depthMap ?? map))
+        }
+        if var depth = depthImage {
+            for i in depth.values.indices {
+                let confidenceValue = i < confidence.count ? Int(confidence[i]) : 2
+                if !depth.values[i].isFinite || depth.values[i] > maxRange || confidenceValue < minConfidence {
+                    depth.values[i] = 0
+                }
+            }
+            depthImage = depth
         }
         let resolution = frame.camera.imageResolution
         let intrinsics = frame.camera.intrinsics
         let view = frame.camera.viewMatrix(for: .landscapeRight)
         lock.lock()
-        let writeColor = lastColor == 0 || timestamp - lastColor >= 0.5
-        if writeColor { lastColor = timestamp }
+        guard accepting, frames.count + pending < maxFrames, pending < 2 else {
+            lock.unlock()
+            return
+        }
+        let index = nextIndex
+        nextIndex += 1
+        pending += 1
         movingTooFast = false
         lastAccepted = timestamp
         lastTransform = transform
         hasPose = true
         let folder = directory
-        let index = frames.count + 1
         lock.unlock()
 
         queue.async { [weak self] in
             guard let self else { return }
-            guard let image = PixelSampler.rgbaImage(from: colorCopy, maxDimension: 1920, imageResolution: resolution) else { return }
-            if writeColor, let jpeg = KeyframeArchive.jpegData(image) {
-                let colorURL = KeyframeArchive.colorURL(in: folder, index: index)
-                try? FileManager.default.createDirectory(at: colorURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? jpeg.write(to: colorURL, options: .atomic)
+            defer {
+                self.lock.lock()
+                self.pending -= 1
+                self.lock.unlock()
             }
-            if let depthImage {
-                try? KeyframeArchive.writeDepth(depthImage, confidence: confidence, to: KeyframeArchive.depthURL(in: folder, index: index))
+            guard let image = PixelSampler.rgbaImage(from: colorCopy, maxDimension: 1920, imageResolution: resolution) else { return }
+            guard let jpeg = KeyframeArchive.jpegData(image, quality: 0.92) else { return }
+            do {
+                let colorURL = KeyframeArchive.colorURL(in: folder, index: index)
+                try FileManager.default.createDirectory(at: colorURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try jpeg.write(to: colorURL, options: .atomic)
+                if let depthImage {
+                    try KeyframeArchive.writeDepth(depthImage, confidence: confidence, to: KeyframeArchive.depthURL(in: folder, index: index))
+                }
+            } catch {
+                Log.scan.error("Keyframe write failed: \(error.localizedDescription, privacy: .public)")
+                return
             }
             let scaleX = Float(image.width) / Float(max(resolution.width, 1))
             let scaleY = Float(image.height) / Float(max(resolution.height, 1))
@@ -132,24 +156,21 @@ final class KeyframeRecorder: @unchecked Sendable {
             let snapshot = self.frames
             self.lock.unlock()
             try? KeyframeArchive.writeManifest(snapshot, to: folder)
-            _ = maxRange
         }
     }
 
-    /// Gives the caller the folder of frames written so far and starts a fresh one.
-    func handoff() -> URL? {
+    /// Snapshot is safe while acceptance is disabled. The archive copies it, never consumes it.
+    func snapshotDirectory() throws -> URL? {
         queue.sync {}
         lock.lock()
-        let folder = directory
-        let count = frames.count
-        frames.removeAll()
-        lastAccepted = 0
-        hasPose = false
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("keyframes-\(UUID().uuidString)", isDirectory: true)
-        let created = directory
-        lock.unlock()
-        try? FileManager.default.createDirectory(at: created, withIntermediateDirectories: true)
-        return count > 0 ? folder : nil
+        defer { lock.unlock() }
+        guard !frames.isEmpty else { return nil }
+        try KeyframeArchive.writeManifest(frames, to: directory)
+        return directory
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: directory)
     }
 
     func consumeTooFast() -> Bool {

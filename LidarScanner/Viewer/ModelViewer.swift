@@ -865,14 +865,16 @@ struct ExportSheet: View {
             guard paths.exists(source) else { throw ScanError.fileMissing }
             mesh = try USDZExtractor.extract(from: source)
         }
-        if let uvs = UVFile.read(from: paths.uvs, expected: mesh.positions.count) {
+        if library.record(scanID)?.showingBuilt == true,
+           let uvs = UVFile.read(from: paths.uvs, expected: mesh.positions.count) {
             mesh.uvs = uvs
         }
         return mesh
     }
 
     private func atlasImage() -> UIImage? {
-        UIImage(contentsOfFile: library.paths(for: scanID).texture.path)
+        guard library.record(scanID)?.showingBuilt == true else { return nil }
+        return UIImage(contentsOfFile: library.paths(for: scanID).texture.path)
     }
 
     private func stage(_ name: String, _ data: Data) throws -> SharePayload {
@@ -904,15 +906,19 @@ struct ExportSheet: View {
 
     private func exportUSDZ() async throws {
         let paths = library.paths(for: scanID)
-        if paths.exists(paths.preview) {
-            share = try shareCopy(of: paths.preview, name: "\(baseName()).usdz")
+        if library.record(scanID)?.isProcessed == false, paths.exists(paths.capture) {
+            share = try shareCopy(of: paths.capture, name: "\(baseName()).usdz")
             return
         }
         let mesh = try await loadMesh()
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("\(baseName()).usdz")
-        try MeshExporter.usdz(mesh: mesh, to: url)
+        if let atlas = atlasImage(), mesh.uvs.count == mesh.positions.count {
+            try MeshExporter.usdzTextured(mesh: mesh, image: atlas, to: url)
+        } else {
+            try MeshExporter.usdz(mesh: mesh, to: url)
+        }
         share = SharePayload(urls: [url], cleanup: folder)
     }
 

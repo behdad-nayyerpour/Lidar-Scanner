@@ -4,6 +4,37 @@ import simd
 
 /// A few frames from a real phone scan. Baking must sample the photos, not paint one flat color per triangle.
 final class RealScanTextureTests: XCTestCase {
+    func testDepthOnlyPoseCannotStealPhotoSelection() throws {
+        let folder = try XCTUnwrap(Bundle(for: Self.self).resourceURL).appendingPathComponent("RealScan")
+        let frames = try KeyframeArchive.readManifest(in: folder)
+        let frame = try XCTUnwrap(frames.first)
+        let depth = try KeyframeArchive.readDepth(at: KeyframeArchive.depthURL(in: folder, index: frame.index)).0
+        let mesh = depthMesh(depth: depth, frame: frame, step: 8)
+        var phantom = frame
+        phantom.index = 999999
+        phantom.blur = 1_000_000
+        var settings = FusionSettings.fast
+        settings.textureSize = 512
+        settings.maxRange = 8
+        let baseline = try XCTUnwrap(AtlasTexturer.texture(mesh: mesh, directory: folder, frames: [frame], settings: settings, signal: nil, progress: nil))
+        let actual = try XCTUnwrap(AtlasTexturer.texture(mesh: mesh, directory: folder, frames: [phantom, frame], settings: settings, signal: nil, progress: nil))
+        XCTAssertEqual(actual.mesh.uvs, baseline.mesh.uvs)
+        XCTAssertEqual(actual.image.pngData(), baseline.image.pngData())
+        XCTAssertNil(AtlasTexturer.texture(mesh: mesh, directory: folder, frames: [phantom], settings: settings, signal: nil, progress: nil))
+    }
+
+    func testLegacyRepeatedIndicesUseTheLastWritersPose() throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).resourceURL).appendingPathComponent("RealScan")
+        var original = try XCTUnwrap(KeyframeArchive.readManifest(in: fixture).first)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let old = original
+        original.timestamp += 1
+        original.view[12] += 0.5
+        try KeyframeArchive.writeManifest([old, original], to: folder)
+        XCTAssertEqual(try KeyframeArchive.readManifest(in: folder), [original])
+    }
+
     func testRealFramesStayPhotoConsistent() throws {
         let bundle = Bundle(for: RealScanTextureTests.self)
         let candidates = [

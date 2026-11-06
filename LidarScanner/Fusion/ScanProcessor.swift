@@ -31,7 +31,10 @@ enum ScanProcessor {
             let range = FusionVoxel.medianDepth(directory: directory, frames: frames)
             let millimeters = FusionVoxel.millimeters(requested: settings.voxelMillimeters, frames: frames, range: range)
             settings.voxelMillimeters = millimeters
-            settings.maxRange = FusionVoxel.integrationRange(subject: range, requested: settings.maxRange)
+            // Room scans must retain the requested range; near furniture must not clip distant walls.
+            if objectCenter != nil {
+                settings.maxRange = FusionVoxel.integrationRange(subject: range, requested: settings.maxRange)
+            }
             Log.scan.info("fusion voxel mm=\(millimeters, privacy: .public) frames=\(frames.count, privacy: .public)")
             let fused = TSDFFusion.fuse(
                 directory: directory,
@@ -110,13 +113,17 @@ enum ScanProcessor {
 
 enum UVFile {
     static func write(_ uvs: [SIMD2<Float>], to url: URL) throws {
+        try encode(uvs).write(to: url, options: .atomic)
+    }
+
+    static func encode(_ uvs: [SIMD2<Float>]) -> Data {
         var data = Data()
         data.appendLE(UInt32(uvs.count))
         for uv in uvs {
             data.appendLE(uv.x.bitPattern)
             data.appendLE(uv.y.bitPattern)
         }
-        try data.write(to: url, options: .atomic)
+        return data
     }
 
     static func read(from url: URL, expected: Int) -> [SIMD2<Float>]? {
