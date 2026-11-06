@@ -63,18 +63,25 @@ final class DeskScanFusionTests: XCTestCase {
         XCTAssertEqual(layers, 1, "keyboard heights \(heights.first ?? 0)…\(heights.last ?? 0) voxel \(settings.voxelSize)")
 
         var longest: Float = 0
+        var feathers = 0
         for triangle in 0..<mesh.triangleCount {
             let ids = (0..<3).map { Int(mesh.indices[triangle * 3 + $0]) }
             guard ids.allSatisfy({ $0 < mesh.positions.count }) else { continue }
             let corners = ids.map { mesh.positions[$0] }
             let midpoint = (corners[0] + corners[1] + corners[2]) / 3
             guard inside(midpoint, min: keyMin, max: keyMax) else { continue }
-            for edge in [(0, 1), (1, 2), (2, 0)] {
-                longest = max(longest, simd_distance(corners[edge.0], corners[edge.1]))
+            var edge: Float = 0
+            for pair in [(0, 1), (1, 2), (2, 0)] {
+                edge = max(edge, simd_distance(corners[pair.0], corners[pair.1]))
             }
+            longest = max(longest, edge)
+            let area = simd_length(simd_cross(corners[1] - corners[0], corners[2] - corners[0])) * 0.5
+            let altitude = edge > 1e-6 ? (2 * area / edge) : 0
+            if edge > 0.02, altitude < settings.voxelSize * 2 { feathers += 1 }
         }
+        XCTAssertEqual(feathers, 0, "thin keyboard triangles")
         XCTAssertGreaterThan(longest, 0)
-        XCTAssertLessThan(longest, settings.voxelSize * 8, "longest keyboard edge \(longest)")
+        XCTAssertLessThan(longest, 0.06, "longest keyboard edge \(longest)")
     }
 
     private func inside(_ point: SIMD3<Float>, min lower: SIMD3<Float>, max upper: SIMD3<Float>) -> Bool {
