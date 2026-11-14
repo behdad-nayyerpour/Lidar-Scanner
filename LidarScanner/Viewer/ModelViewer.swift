@@ -273,6 +273,7 @@ struct ModelViewer: View {
     @State private var showStats = false
     @State private var showQuality = false
     @State private var offeredQuality = false
+    @State private var loadGeneration = 0
     @State private var confirmRevert = false
     @State private var renameText = ""
     @State private var renaming = false
@@ -340,7 +341,8 @@ struct ModelViewer: View {
             Task { await load() }
         }
         .onAppear {
-            if !offeredQuality, library.record(scanID)?.hasKeyframes == true, library.record(scanID)?.qualityApplied != true {
+            if !offeredQuality, library.record(scanID)?.hasKeyframes == true,
+               (library.record(scanID)?.qualityApplied != true || !library.paths(for: scanID).exists(library.paths(for: scanID).surfaceAsset)) {
                 offeredQuality = true
                 showQuality = true
             }
@@ -444,22 +446,7 @@ struct ModelViewer: View {
 
     @ViewBuilder
     private var colorBar: some View {
-        if let job = library.colorJob, job.scanID == scanID {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(job.message).font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Text("\(Int((job.progress * 100).rounded()))%")
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(AppColor.textSecondary)
-                }
-                ProgressView(value: job.progress).tint(AppColor.accent)
-                Button(L10n.colorCancel) { library.cancelAddingColor() }
-                    .font(.subheadline.weight(.semibold))
-            }
-            .padding(12)
-            .background(AppColor.surface)
-        } else if let job = library.refineJob, job.scanID == scanID {
+        if let job = library.refineJob, job.scanID == scanID {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text(job.message).font(.subheadline.weight(.semibold))
@@ -480,7 +467,7 @@ struct ModelViewer: View {
             }
             .padding(12)
             .background(AppColor.surface)
-        } else if record?.canAddColor == true {
+        } else if record?.canAddColor == true || (record?.hasKeyframes == true && !library.paths(for: scanID).exists(library.paths(for: scanID).surfaceAsset)) {
             Button {
                 library.startAddingColor(to: scanID)
             } label: {
@@ -574,6 +561,8 @@ struct ModelViewer: View {
     }
 
     private func load() async {
+        loadGeneration += 1
+        let generation = loadGeneration
         let paths = library.paths(for: scanID)
         let record = library.record(scanID)
         let meshURL = paths.mesh
@@ -589,8 +578,10 @@ struct ModelViewer: View {
                 let surface = try await Task.detached(priority: .userInitiated) {
                     try SurfaceAsset.load(paths: paths, showingBuilt: record?.showingBuilt == true)
                 }.value
+                guard generation == loadGeneration else { return }
                 model.show(mesh: surface.mesh, colored: record?.isColored == true, texture: surface.texture)
             } catch {
+                guard generation == loadGeneration else { return }
                 model.errorText = error.localizedDescription
                 model.isLoading = false
             }

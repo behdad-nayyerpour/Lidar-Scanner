@@ -7,7 +7,6 @@ import UIKit
 final class ScanLibrary: ObservableObject {
     @Published private(set) var records: [ScanRecord] = []
     @Published private(set) var thumbnails: [UUID: UIImage] = [:]
-    var colorJob: ColorJob? { nil }
     @Published var refineJob: ColorJob?
     @Published var buildLog = ""
     @Published var colorNotice: String?
@@ -66,9 +65,6 @@ final class ScanLibrary: ObservableObject {
     }
 
     func delete(_ id: UUID) throws {
-        if colorJob?.scanID == id {
-            cancelAddingColor(notify: false)
-        }
         if refineJob?.scanID == id {
             cancelRefinement(notify: false)
         }
@@ -171,7 +167,6 @@ final class ScanLibrary: ObservableObject {
     }
 
     func replaceMesh(id: UUID, mesh: ScanMesh) throws {
-        if colorJob?.scanID == id { cancelAddingColor(notify: false) }
         if refineJob?.scanID == id { cancelRefinement(notify: false) }
         guard var record = record(id) else { return }
         let paths = paths(for: id)
@@ -199,7 +194,6 @@ final class ScanLibrary: ObservableObject {
     }
 
     func revert(id: UUID) throws {
-        if colorJob?.scanID == id { cancelAddingColor(notify: false) }
         if refineJob?.scanID == id { cancelRefinement(notify: false) }
         guard var record = record(id) else { return }
         let paths = paths(for: id)
@@ -262,10 +256,8 @@ final class ScanLibrary: ObservableObject {
         startRefinement(id: id, settings: .fast)
     }
 
-    func cancelAddingColor(notify: Bool = true) { cancelRefinement(notify: notify) }
-
     func startRefinement(id: UUID, settings: FusionSettings) {
-        guard refineJob == nil, colorJob == nil else {
+        guard refineJob == nil else {
             colorNotice = L10n.colorBusy
             return
         }
@@ -273,6 +265,7 @@ final class ScanLibrary: ObservableObject {
             colorNotice = L10n.qualityNeedsFrames
             return
         }
+        refineGeneration += 1
         let generation = refineGeneration
         let signal = WorkSignal()
         refineSignal = signal
@@ -281,7 +274,8 @@ final class ScanLibrary: ObservableObject {
         let started = CFAbsoluteTimeGetCurrent()
         var lastStage = ""
         let paths = paths(for: id)
-        let meshURL = paths.exists(paths.original) ? paths.original : paths.mesh
+        // Texture-only builds keep the currently selected/cropped geometry.
+        let meshURL = settings.fuse && paths.exists(paths.original) ? paths.original : paths.mesh
         let framesURL = paths.frames
         let center = record.objectCenter.flatMap { values -> SIMD3<Float>? in
             guard values.count == 3 else { return nil }
@@ -310,6 +304,14 @@ final class ScanLibrary: ObservableObject {
                 }
             }
             guard !signal.isCancelled else { return }
+            if result.textureFailed {
+                Task { @MainActor [weak self] in
+                    guard let self, generation == self.refineGeneration else { return }
+                    self.refineJob = nil
+                    self.colorNotice = L10n.colorFailed
+                }
+                return
+            }
             guard !result.mesh.isEmpty else {
                 Task { @MainActor [weak self] in
                     guard let self, generation == self.refineGeneration else { return }
@@ -431,7 +433,6 @@ final class ScanLibrary: ObservableObject {
     }
 
     private func activate(id: UUID, built: Bool) throws {
-        if colorJob?.scanID == id { cancelAddingColor(notify: false) }
         if refineJob?.scanID == id { cancelRefinement(notify: false) }
         guard var record = record(id) else { return }
         let paths = paths(for: id)

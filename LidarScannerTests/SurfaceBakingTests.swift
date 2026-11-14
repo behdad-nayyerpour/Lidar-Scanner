@@ -95,6 +95,43 @@ final class SurfaceBakingTests: XCTestCase {
         payload["image"] = Data([0, 1, 2])
         let broken = try PropertyListSerialization.data(fromPropertyList: payload, format: .binary, options: 0)
         XCTAssertThrowsError(try SurfaceAsset.decode(broken))
+        payload = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        var otherMesh = result.mesh
+        otherMesh.positions[0].z += 1
+        payload["mesh"] = MeshIO.encode(otherMesh)
+        let mixedBuild = try PropertyListSerialization.data(fromPropertyList: payload, format: .binary, options: 0)
+        XCTAssertThrowsError(try SurfaceAsset.decode(mixedBuild), "Even equal vertex counts cannot mix build payloads")
+    }
+
+    @MainActor
+    func testFailedRebuildPreservesPreviouslyValidSurfaceAndGeometry() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.0) }
+        let baked = try bake(f)
+        let library = ScanLibrary(root: f.0.appendingPathComponent("library"))
+        let id = UUID()
+        let record = ScanRecord(id: id, name: "Keep good build", createdAt: Date(), updatedAt: Date(), mode: .room,
+                                status: .ready, vertexCount: baked.mesh.positions.count, triangleCount: baked.mesh.triangleCount,
+                                surfaceArea: 1, boundsMin: [-1, -1, -2], boundsMax: [1, 1, -1], isProcessed: true,
+                                isColored: true, hasKeyframes: true, qualityApplied: true, builtAvailable: true, showingBuilt: true)
+        library.adopt(record: record, thumbnail: nil)
+        let paths = library.paths(for: id)
+        let asset = try SurfaceAsset.encode(mesh: baked.mesh, image: baked.image)
+        let ply = MeshIO.encode(baked.mesh)
+        try asset.write(to: paths.surfaceAsset)
+        try ply.write(to: paths.mesh)
+        try ply.write(to: paths.original)
+        // Manifest exists, but the source photograph is missing: this rebuild must fail closed.
+        try KeyframeArchive.writeManifest([f.2], to: paths.frames)
+        library.startRefinement(id: id, settings: .fast)
+        for _ in 0..<300 {
+            if library.refineJob == nil { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertNil(library.refineJob)
+        XCTAssertNotNil(library.colorNotice)
+        XCTAssertEqual(try Data(contentsOf: paths.surfaceAsset), asset)
+        XCTAssertEqual(try Data(contentsOf: paths.mesh), ply)
     }
 
     @MainActor

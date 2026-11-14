@@ -49,7 +49,7 @@ enum SurfaceAsset {
     }
 
     private static func validate(_ mesh: ScanMesh) throws {
-        guard !mesh.isEmpty, mesh.uvs.count == mesh.positions.count,
+        guard !mesh.isEmpty, mesh.indices.count % 3 == 0, mesh.uvs.count == mesh.positions.count,
               mesh.indices.allSatisfy({ Int($0) < mesh.positions.count }),
               mesh.positions.allSatisfy({ $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }),
               mesh.uvs.allSatisfy({ $0.x.isFinite && $0.y.isFinite && $0.x >= 0 && $0.x <= 1 && $0.y >= 0 && $0.y <= 1 }) else {

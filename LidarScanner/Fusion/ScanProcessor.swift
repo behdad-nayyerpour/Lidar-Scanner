@@ -6,6 +6,7 @@ struct BuildResult {
     var texture: UIImage?
     var notice: String?
     var replacedGeometry: Bool
+    var textureFailed: Bool = false
 }
 
 enum ScanProcessor {
@@ -69,7 +70,7 @@ enum ScanProcessor {
         }
         progress?(0.48, L10n.qualityWorkingClean)
         if signal?.isCancelled == true || frames.isEmpty {
-            return BuildResult(mesh: working, texture: nil, notice: notice, replacedGeometry: replaced)
+            return BuildResult(mesh: working, texture: nil, notice: notice, replacedGeometry: replaced, textureFailed: frames.isEmpty)
         }
         progress?(0.55, L10n.qualityStageAtlas)
         let textureStarted = CFAbsoluteTimeGetCurrent()
@@ -88,7 +89,7 @@ enum ScanProcessor {
             fillTolerance: tolerance
         ) else {
             Log.scan.info("texture stopped ms=\(ScanTiming.milliseconds(since: textureStarted), privacy: .public)")
-            return BuildResult(mesh: working, texture: nil, notice: L10n.colorFailed, replacedGeometry: replaced)
+            return BuildResult(mesh: working, texture: nil, notice: L10n.colorFailed, replacedGeometry: replaced, textureFailed: true)
         }
         Log.scan.info("texture faces=\(textured.mesh.triangleCount, privacy: .public) ms=\(ScanTiming.milliseconds(since: textureStarted), privacy: .public)")
         return BuildResult(mesh: textured.mesh, texture: textured.image, notice: textured.coverage < 0.9 ? L10n.colorPartial : notice, replacedGeometry: replaced)

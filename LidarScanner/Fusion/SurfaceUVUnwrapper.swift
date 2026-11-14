@@ -27,10 +27,13 @@ enum SurfaceUVUnwrapper {
         for i in 0..<Int(native.vertexCount) {
             result.positions.append(SIMD3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]))
             result.uvs.append(SIMD2(uvs[i * 2], 1 - uvs[i * 2 + 1]))
+            if let mapping = native.sourceVertices, mesh.normals.count == mesh.positions.count {
+                result.normals.append(mesh.normals[Int(mapping[i])])
+            }
         }
         for i in 0..<Int(native.indexCount) { result.indices.append(indices[i]) }
         result.faceClasses = mesh.faceClasses
-        result.recomputeNormals()
+        if result.normals.count != result.positions.count { result.recomputeNormals() }
         guard result.uvs.allSatisfy({ $0.x.isFinite && $0.y.isFinite && $0.x >= 0 && $0.x <= 1 && $0.y >= 0 && $0.y <= 1 }) else { return nil }
         return result
     }
