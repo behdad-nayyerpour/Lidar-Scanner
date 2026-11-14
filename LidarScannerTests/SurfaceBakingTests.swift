@@ -67,6 +67,17 @@ final class SurfaceBakingTests: XCTestCase {
         XCTAssertGreaterThan(result.coverage, 0.5)
     }
 
+    func testMeshVisibilityDepthIsPerspectiveCorrectOnObliqueTriangles() throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.0) }
+        let map = try XCTUnwrap(FaceVisibility.depthMap(mesh: f.1, frame: f.2, width: 128))
+        for x in [32, 64, 88] {
+            let rayX = (Float(x) + 0.5 - 64) / 70
+            let expected = 1.5 / (1 - rayX * (5 / Float(9)))
+            XCTAssertEqual(map.values[64 * 128 + x], expected, accuracy: 0.01)
+        }
+    }
+
     func testSingleAssetBindsUVsAndLosslessPixelsAndRejectsCorruption() throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.0) }
