@@ -5,7 +5,7 @@ enum MeshIO {
     static func encode(_ mesh: ScanMesh) -> Data {
         let vertexCount = mesh.positions.count
         let faceCount = mesh.triangleCount
-        let header = [
+        var fields = [
             "ply",
             "format binary_little_endian 1.0",
             "comment Lidar Scanner",
@@ -18,11 +18,16 @@ enum MeshIO {
             "property float nz",
             "property uchar red",
             "property uchar green",
-            "property uchar blue",
+            "property uchar blue"
+        ]
+        let textured = mesh.uvs.count == vertexCount
+        if textured { fields += ["property float texture_u", "property float texture_v"] }
+        fields += [
             "element face \(faceCount)",
             "property list uchar uint vertex_indices",
             "end_header"
-        ].joined(separator: "\n") + "\n"
+        ]
+        let header = fields.joined(separator: "\n") + "\n"
         var data = Data(header.utf8)
         for index in 0..<vertexCount {
             let position = mesh.positions[index]
@@ -37,6 +42,10 @@ enum MeshIO {
             data.appendUInt8(UInt8((min(1, max(0, color.x)) * 255).rounded()))
             data.appendUInt8(UInt8((min(1, max(0, color.y)) * 255).rounded()))
             data.appendUInt8(UInt8((min(1, max(0, color.z)) * 255).rounded()))
+            if textured {
+                data.appendFloat(mesh.uvs[index].x)
+                data.appendFloat(mesh.uvs[index].y)
+            }
         }
         for triangle in 0..<faceCount {
             data.appendUInt8(3)
@@ -48,7 +57,10 @@ enum MeshIO {
     }
 
     static func read(from url: URL) throws -> ScanMesh {
-        let data = try Data(contentsOf: url)
+        try decode(Data(contentsOf: url))
+    }
+
+    static func decode(_ data: Data) throws -> ScanMesh {
         guard let headerEnd = data.range(of: Data("end_header\n".utf8)) ?? data.range(of: Data("end_header\r\n".utf8)) else {
             throw ScanError.unreadableMesh
         }
@@ -86,6 +98,7 @@ enum MeshIO {
         var positions = [SIMD3<Float>]()
         var normals = [SIMD3<Float>]()
         var colors = [SIMD3<Float>]()
+        var uvs = [SIMD2<Float>]()
         positions.reserveCapacity(vertexCount)
         normals.reserveCapacity(vertexCount)
         colors.reserveCapacity(vertexCount)
@@ -100,6 +113,7 @@ enum MeshIO {
                     values[property] = try data.readFloat(&cursor)
                 }
             }
+            if let u = values["texture_u"], let v = values["texture_v"] { uvs.append(SIMD2(u, v)) }
             positions.append(SIMD3(values["x"] ?? 0, values["y"] ?? 0, values["z"] ?? 0))
             normals.append(SIMD3(values["nx"] ?? 0, values["ny"] ?? 1, values["nz"] ?? 0))
             colors.append(SIMD3(
@@ -120,6 +134,7 @@ enum MeshIO {
         }
 
         var mesh = ScanMesh(positions: positions, normals: normals, colors: colors, indices: indices, faceClasses: [])
+        mesh.uvs = uvs
         if mesh.normals.count != mesh.positions.count || mesh.normals.allSatisfy({ simd_length($0) < 0.01 }) {
             mesh.recomputeNormals()
         }

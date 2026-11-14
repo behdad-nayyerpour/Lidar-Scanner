@@ -24,16 +24,18 @@ final class ScanArtifactTests: XCTestCase {
         try MeshIO.encode(original).write(to: paths.original)
         try MeshIO.encode(built).write(to: paths.built)
         try MeshIO.encode(built).write(to: paths.mesh)
-        let atlas = Data("built atlas".utf8)
-        try atlas.write(to: paths.texture)
-        try UVFile.write([.zero, SIMD2(1, 0), SIMD2(0, 1)], to: paths.uvs)
+        built.uvs = [.zero, SIMD2(1, 0), SIMD2(0, 1)]
+        var image = AtlasImage(width: 4, height: 4)
+        image.set(0, 0, SIMD3(1, 0, 0))
+        let atlas = try SurfaceAsset.encode(mesh: built, image: XCTUnwrap(image.uiImage()))
+        try atlas.write(to: paths.surfaceAsset)
 
         try library.showOriginalMesh(id: id)
         XCTAssertEqual(try library.loadMesh(id: id)?.positions, original.positions)
         XCTAssertEqual(library.record(id)?.showingBuilt, false)
         XCTAssertEqual(library.record(id)?.isColored, false)
         XCTAssertEqual(library.record(id)?.isProcessed, false)
-        XCTAssertEqual(try Data(contentsOf: paths.texture), atlas)
+        XCTAssertEqual(try Data(contentsOf: paths.surfaceAsset), atlas)
 
         try library.showBuiltMesh(id: id)
         XCTAssertEqual(try library.loadMesh(id: id)?.positions, built.positions)

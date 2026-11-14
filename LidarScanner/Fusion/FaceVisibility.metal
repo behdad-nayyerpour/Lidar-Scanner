@@ -16,7 +16,7 @@ vertex VisibilityOut visibilityVertex(
     uint index = indices[vid];
     float3 world = float3(positions[index * 3], positions[index * 3 + 1], positions[index * 3 + 2]);
     float4 cam = view * float4(world, 1.0);
-    float depth = max(-cam.z, 0.001);
+    float depth = -cam.z;
     float fx = camera[0];
     float fy = camera[1];
     float cx = camera[2];
@@ -24,10 +24,15 @@ vertex VisibilityOut visibilityVertex(
     float width = camera[4];
     float height = camera[5];
     float maxRange = camera[6];
-    float u = fx * (cam.x / depth) + cx;
-    float v = fy * (-cam.y / depth) + cy;
     VisibilityOut out;
-    out.position = float4(u / width * 2.0 - 1.0, 1.0 - v / height * 2.0, depth / maxRange, 1.0);
+    // Preserve camera depth in clip W. W=1 would linearly interpolate depth in screen space,
+    // giving the wrong occlusion depth on tilted triangles.
+    float nearRange = 0.05;
+    float a = maxRange / (maxRange - nearRange);
+    float b = -maxRange * nearRange / (maxRange - nearRange);
+    out.position = float4(2.0 * fx * cam.x / width + (2.0 * cx / width - 1.0) * depth,
+                          2.0 * fy * cam.y / height + (1.0 - 2.0 * cy / height) * depth,
+                          a * depth + b, depth);
     out.cameraDepth = depth;
     return out;
 }

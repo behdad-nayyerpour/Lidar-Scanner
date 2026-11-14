@@ -7,13 +7,10 @@ import UIKit
 final class ScanLibrary: ObservableObject {
     @Published private(set) var records: [ScanRecord] = []
     @Published private(set) var thumbnails: [UUID: UIImage] = [:]
-    @Published var colorJob: ColorJob?
     @Published var refineJob: ColorJob?
     @Published var buildLog = ""
     @Published var colorNotice: String?
 
-    private var colorSignal = WorkSignal()
-    private var colorGeneration = 0
     private var refineSignal = WorkSignal()
     private var refineGeneration = 0
 
@@ -68,9 +65,6 @@ final class ScanLibrary: ObservableObject {
     }
 
     func delete(_ id: UUID) throws {
-        if colorJob?.scanID == id {
-            cancelAddingColor(notify: false)
-        }
         if refineJob?.scanID == id {
             cancelRefinement(notify: false)
         }
@@ -173,7 +167,6 @@ final class ScanLibrary: ObservableObject {
     }
 
     func replaceMesh(id: UUID, mesh: ScanMesh) throws {
-        if colorJob?.scanID == id { cancelAddingColor(notify: false) }
         if refineJob?.scanID == id { cancelRefinement(notify: false) }
         guard var record = record(id) else { return }
         let paths = paths(for: id)
@@ -201,7 +194,6 @@ final class ScanLibrary: ObservableObject {
     }
 
     func revert(id: UUID) throws {
-        if colorJob?.scanID == id { cancelAddingColor(notify: false) }
         if refineJob?.scanID == id { cancelRefinement(notify: false) }
         guard var record = record(id) else { return }
         let paths = paths(for: id)
@@ -235,7 +227,7 @@ final class ScanLibrary: ObservableObject {
     func loadMesh(id: UUID) throws -> ScanMesh? {
         let paths = paths(for: id)
         guard paths.exists(paths.mesh) else { return nil }
-        return try MeshIO.read(from: paths.mesh)
+        return try SurfaceAsset.load(paths: paths, showingBuilt: record(id)?.showingBuilt == true).mesh
     }
 
     func measurements(id: UUID) -> [StoredMeasurement] {
@@ -257,159 +249,15 @@ final class ScanLibrary: ObservableObject {
     }
 
     func startAddingColor(to id: UUID) {
-        guard colorJob == nil, refineJob == nil else {
-            colorNotice = L10n.colorBusy
-            return
-        }
-        guard let record = record(id), record.canAddColor else {
+        guard record(id)?.hasKeyframes == true else {
             colorNotice = L10n.colorUnavailable
             return
         }
-        let generation = colorGeneration
-        let signal = WorkSignal()
-        colorSignal = signal
-        colorJob = ColorJob(scanID: id, progress: 0.02, message: L10n.colorWorking)
-        let meshURL = paths(for: id).mesh
-        let framesURL = paths(for: id).colorFrames
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let started = CFAbsoluteTimeGetCurrent()
-            do {
-                var mesh = try MeshIO.read(from: meshURL)
-                let frames = try ColorFrameStore.read(from: framesURL)
-                Log.scan.info("addColor start vertices=\(mesh.positions.count, privacy: .public) triangles=\(mesh.triangleCount, privacy: .public) frames=\(frames.count, privacy: .public)")
-                let outcome = MeshColorizer.colorize(&mesh, keyframes: frames, signal: signal) { fraction in
-                    Task { @MainActor [weak self] in
-                        self?.updateColorProgress(0.05 + 0.7 * fraction, id: id, generation: generation)
-                    }
-                }
-                if signal.isCancelled {
-                    Task { @MainActor [weak self] in self?.finishColorCancelled(generation: generation) }
-                    return
-                }
-                let plyStarted = CFAbsoluteTimeGetCurrent()
-                let ply = MeshIO.encode(mesh)
-                Log.scan.info("addColor ply ms=\(ScanTiming.milliseconds(since: plyStarted), privacy: .public)")
-                Task { @MainActor [weak self] in
-                    self?.updateColorProgress(0.8, id: id, generation: generation)
-                }
-                let previewStarted = CFAbsoluteTimeGetCurrent()
-                let baked = TextureBaker.bake(mesh, shouldStop: { signal.isCancelled })
-                var previewData: Data?
-                if !signal.isCancelled {
-                    let previewFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("usdz")
-                    if let baked {
-                        try? MeshExporter.usdz(mesh: mesh, baked: baked, to: previewFile, allowBake: false)
-                    } else {
-                        try? MeshExporter.usdz(mesh: mesh, baked: nil, to: previewFile, allowBake: false)
-                    }
-                    previewData = try? Data(contentsOf: previewFile)
-                    try? FileManager.default.removeItem(at: previewFile)
-                }
-                let thumbnail = signal.isCancelled ? nil : ThumbnailRenderer.image(mesh: mesh)
-                Log.scan.info("addColor preview ms=\(ScanTiming.milliseconds(since: previewStarted), privacy: .public) total ms=\(ScanTiming.milliseconds(since: started), privacy: .public)")
-                let png = thumbnail?.pngData()
-                Task { @MainActor [weak self] in
-                    if signal.isCancelled {
-                        self?.finishColorCancelled(generation: generation)
-                        return
-                    }
-                    self?.commitColor(
-                        id: id,
-                        generation: generation,
-                        mesh: mesh,
-                        ply: ply,
-                        previewData: previewData,
-                        thumbnail: thumbnail,
-                        thumbnailData: png,
-                        partial: outcome.partial,
-                        coloredVertices: outcome.coloredVertices
-                    )
-                }
-            } catch {
-                Log.scan.error("addColor failed \(error.localizedDescription, privacy: .public)")
-                Task { @MainActor [weak self] in
-                    self?.failColor(generation: generation, message: L10n.colorFailed)
-                }
-            }
-        }
-    }
-
-    func cancelAddingColor(notify: Bool = true) {
-        colorSignal.cancel()
-        colorGeneration += 1
-        colorJob = nil
-        if notify {
-            colorNotice = L10n.colorCancelled
-        }
-    }
-
-    private func updateColorProgress(_ progress: Double, id: UUID, generation: Int) {
-        guard generation == colorGeneration, colorJob?.scanID == id else { return }
-        colorJob?.progress = progress
-        colorJob?.message = L10n.colorWorking
-    }
-
-    private func finishColorCancelled(generation: Int) {
-        guard generation == colorGeneration else { return }
-        colorJob = nil
-        colorNotice = L10n.colorCancelled
-    }
-
-    private func failColor(generation: Int, message: String) {
-        guard generation == colorGeneration else { return }
-        colorJob = nil
-        colorNotice = message
-    }
-
-    private func commitColor(
-        id: UUID,
-        generation: Int,
-        mesh: ScanMesh,
-        ply: Data,
-        previewData: Data?,
-        thumbnail: UIImage?,
-        thumbnailData: Data?,
-        partial: Bool,
-        coloredVertices: Int
-    ) {
-        guard generation == colorGeneration, var record = record(id) else { return }
-        let paths = paths(for: id)
-        do {
-            try ply.write(to: paths.mesh, options: .atomic)
-        } catch {
-            colorJob = nil
-            colorNotice = L10n.colorFailed
-            return
-        }
-        if let previewData {
-            try? previewData.write(to: paths.preview, options: .atomic)
-        }
-        if let thumbnailData {
-            try? thumbnailData.write(to: paths.thumbnail, options: .atomic)
-        }
-        if let thumbnail {
-            thumbnails[id] = thumbnail
-        }
-        let bounds = mesh.boundingBox()
-        record.vertexCount = mesh.positions.count
-        record.triangleCount = mesh.triangleCount
-        record.surfaceArea = Double(mesh.surfaceArea())
-        record.boundsMin = [bounds.min.x, bounds.min.y, bounds.min.z]
-        record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
-        record.isColored = coloredVertices > 0
-        record.showingBuilt = false
-        record.updatedAt = Date()
-        try? write(record)
-        colorJob = nil
-        if coloredVertices == 0 {
-            colorNotice = L10n.colorFailed
-        } else if partial {
-            colorNotice = L10n.colorPartial
-        }
+        startRefinement(id: id, settings: .fast)
     }
 
     func startRefinement(id: UUID, settings: FusionSettings) {
-        guard refineJob == nil, colorJob == nil else {
+        guard refineJob == nil else {
             colorNotice = L10n.colorBusy
             return
         }
@@ -417,6 +265,7 @@ final class ScanLibrary: ObservableObject {
             colorNotice = L10n.qualityNeedsFrames
             return
         }
+        refineGeneration += 1
         let generation = refineGeneration
         let signal = WorkSignal()
         refineSignal = signal
@@ -425,7 +274,8 @@ final class ScanLibrary: ObservableObject {
         let started = CFAbsoluteTimeGetCurrent()
         var lastStage = ""
         let paths = paths(for: id)
-        let meshURL = paths.exists(paths.original) ? paths.original : paths.mesh
+        // Texture-only builds keep the currently selected/cropped geometry.
+        let meshURL = settings.fuse && paths.exists(paths.original) ? paths.original : paths.mesh
         let framesURL = paths.frames
         let center = record.objectCenter.flatMap { values -> SIMD3<Float>? in
             guard values.count == 3 else { return nil }
@@ -454,6 +304,14 @@ final class ScanLibrary: ObservableObject {
                 }
             }
             guard !signal.isCancelled else { return }
+            if result.textureFailed {
+                Task { @MainActor [weak self] in
+                    guard let self, generation == self.refineGeneration else { return }
+                    self.refineJob = nil
+                    self.colorNotice = L10n.colorFailed
+                }
+                return
+            }
             guard !result.mesh.isEmpty else {
                 Task { @MainActor [weak self] in
                     guard let self, generation == self.refineGeneration else { return }
@@ -480,7 +338,17 @@ final class ScanLibrary: ObservableObject {
             }
             let previewData = try? Data(contentsOf: previewFile)
             let ply = MeshIO.encode(result.mesh)
-            let jpeg = result.texture?.jpegData(compressionQuality: 0.86)
+            let surfaceData: Data?
+            do {
+                surfaceData = try result.texture.map { try SurfaceAsset.encode(mesh: result.mesh, image: $0) }
+            } catch {
+                Task { @MainActor [weak self] in
+                    guard let self, generation == self.refineGeneration else { return }
+                    self.refineJob = nil
+                    self.colorNotice = L10n.colorFailed
+                }
+                return
+            }
             let thumbnail = result.texture == nil
                 ? ThumbnailRenderer.image(mesh: result.mesh, solidColor: UIColor(red: 0.78, green: 0.64, blue: 0.50, alpha: 1))
                 : ThumbnailRenderer.image(mesh: result.mesh)
@@ -490,7 +358,7 @@ final class ScanLibrary: ObservableObject {
                     generation: generation,
                     mesh: result.mesh,
                     ply: ply,
-                    texture: jpeg,
+                    surfaceData: surfaceData,
                     previewData: previewData,
                     thumbnail: thumbnail,
                     cancelled: signal.isCancelled,
@@ -512,7 +380,7 @@ final class ScanLibrary: ObservableObject {
         generation: Int,
         mesh: ScanMesh,
         ply: Data,
-        texture: Data?,
+        surfaceData: Data?,
         previewData: Data?,
         thumbnail: UIImage?,
         cancelled: Bool,
@@ -531,17 +399,16 @@ final class ScanLibrary: ObservableObject {
         record.surfaceArea = Double(mesh.surfaceArea())
         record.boundsMin = [bounds.min.x, bounds.min.y, bounds.min.z]
         record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
-        record.isColored = texture != nil && mesh.uvs.count == mesh.positions.count
+        record.isColored = surfaceData != nil
         record.qualityApplied = true
         record.isProcessed = true
         record.builtAvailable = true
         record.showingBuilt = true
         record.updatedAt = Date()
         do {
-            let uvData = record.isColored ? UVFile.encode(mesh.uvs) : nil
             try ScanArtifactTransaction.replace([
                 (paths.built, ply), (paths.mesh, ply),
-                (paths.uvs, uvData), (paths.texture, record.isColored ? texture : nil),
+                (paths.surfaceAsset, surfaceData), (paths.uvs, nil), (paths.texture, nil),
                 (paths.preview, previewData), (paths.thumbnail, thumbnail?.pngData()),
                 (paths.builtPreview, previewData),
                 (paths.meta, try JSONCoding.encoder.encode(record))
@@ -566,7 +433,6 @@ final class ScanLibrary: ObservableObject {
     }
 
     private func activate(id: UUID, built: Bool) throws {
-        if colorJob?.scanID == id { cancelAddingColor(notify: false) }
         if refineJob?.scanID == id { cancelRefinement(notify: false) }
         guard var record = record(id) else { return }
         let paths = paths(for: id)
@@ -574,7 +440,7 @@ final class ScanLibrary: ObservableObject {
         guard paths.exists(source) else { return }
         let data = try Data(contentsOf: source)
         try data.write(to: paths.mesh, options: .atomic)
-        record.isColored = built && paths.exists(paths.texture)
+        record.isColored = built && paths.exists(paths.surfaceAsset)
         if let mesh = try? MeshIO.read(from: paths.mesh) {
             let bounds = mesh.boundingBox()
             record.vertexCount = mesh.positions.count

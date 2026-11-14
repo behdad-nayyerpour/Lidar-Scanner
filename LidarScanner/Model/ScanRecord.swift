@@ -53,7 +53,7 @@ struct ScanRecord: Codable, Identifiable, Equatable {
     var objectCenter: [Float]?
     var objectRadius: Float?
 
-    var canAddColor: Bool { hasColorFrames && !isColored }
+    var canAddColor: Bool { hasKeyframes && !isColored }
     var canRefine: Bool { hasKeyframes }
 
     init(
@@ -203,6 +203,7 @@ struct ScanPaths {
     var measurements: URL { directory.appendingPathComponent("measurements.json") }
     var colorFrames: URL { directory.appendingPathComponent("colorframes.bin") }
     var frames: URL { directory.appendingPathComponent("Frames", isDirectory: true) }
+    var surfaceAsset: URL { directory.appendingPathComponent("surface.v2.plist") }
     var texture: URL { directory.appendingPathComponent("texture.jpg") }
     var uvs: URL { directory.appendingPathComponent("uvs.bin") }
     var images: URL { directory.appendingPathComponent("Images", isDirectory: true) }

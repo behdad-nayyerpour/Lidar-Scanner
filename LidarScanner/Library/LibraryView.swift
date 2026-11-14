@@ -61,7 +61,7 @@ struct RootView: View {
                 ScanRow(
                     record: record,
                     thumbnail: library.thumbnails[record.id],
-                    colorProgress: library.colorJob?.scanID == record.id ? library.colorJob?.progress : nil
+                    colorProgress: library.refineJob?.scanID == record.id ? library.refineJob?.progress : nil
                 )
                     .tag(record.id)
                     .listRowBackground(AppColor.surface)
@@ -263,7 +263,7 @@ struct ScanRow: View {
                     HStack {
                         Text(L10n.colorWorking)
                         Spacer()
-                        Button(L10n.colorCancel) { library.cancelAddingColor() }
+                        Button(L10n.colorCancel) { library.cancelRefinement() }
                     }
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColor.accent)

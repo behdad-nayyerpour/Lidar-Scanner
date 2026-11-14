@@ -164,6 +164,7 @@ final class TextureCorrectnessTests: XCTestCase {
         var missing = 0
         var examples: [String] = []
         let result = textured.mesh
+        let atlasPixels = try XCTUnwrap(topOriginPixels(textured.image))
         for triangle in 0..<result.triangleCount {
             let ids = (0..<3).map { Int(result.indices[triangle * 3 + $0]) }
             guard ids.allSatisfy({ $0 < result.positions.count && $0 < result.colors.count && $0 < result.normals.count }) else { continue }
@@ -171,7 +172,11 @@ final class TextureCorrectnessTests: XCTestCase {
             let normal = (result.normals[ids[0]] + result.normals[ids[1]] + result.normals[ids[2]]) / 3
             guard visible(center, normal: normal, frames: frames), stableColor(at: center, min: boxMin, max: boxMax) else { continue }
             guard let expected = surfaceColor(at: center, min: boxMin, max: boxMax) else { continue }
-            let color = (result.colors[ids[0]] + result.colors[ids[1]] + result.colors[ids[2]]) / 3
+            let uv = (result.uvs[ids[0]] + result.uvs[ids[1]] + result.uvs[ids[2]]) / 3
+            let x = min(atlasPixels.width - 1, max(0, Int(uv.x * Float(atlasPixels.width))))
+            let y = min(atlasPixels.height - 1, max(0, Int((1 - uv.y) * Float(atlasPixels.height))))
+            let pixel = (y * atlasPixels.width + x) * 4
+            let color = SIMD3(Float(atlasPixels.rgba[pixel]), Float(atlasPixels.rgba[pixel + 1]), Float(atlasPixels.rgba[pixel + 2])) / 255
             checked += 1
             if matches(color, expected) {
                 correct += 1
@@ -205,7 +210,12 @@ final class TextureCorrectnessTests: XCTestCase {
         let y = Int(((1 - faceUV.y) * Float(pixels.height - 1)).rounded())
         let pixel = (y * pixels.width + x) * 4
         let sampled = SIMD3(Float(pixels.rgba[pixel]) / 255, Float(pixels.rgba[pixel + 1]) / 255, Float(pixels.rgba[pixel + 2]) / 255)
-        XCTAssertLessThan(simd_distance(sampled, result.colors[ids[0]]), 0.08, "Viewer UV v = 1 reads the top of the texture")
+        let center = ids.reduce(SIMD3<Float>.zero) { $0 + result.positions[$1] } / 3
+        let normal = ids.reduce(SIMD3<Float>.zero) { $0 + result.normals[$1] } / 3
+        if visible(center, normal: normal, frames: frames), stableColor(at: center, min: boxMin, max: boxMax),
+           let expected = surfaceColor(at: center, min: boxMin, max: boxMax) {
+            XCTAssertLessThan(simd_distance(sampled, expected), 0.15, "Atlas interior must match the independently defined surface, not a flat vertex color")
+        }
     }
 
     func testGapFillRestoresAHoleAfterSmoothing() {
