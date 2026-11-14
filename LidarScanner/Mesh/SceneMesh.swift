@@ -166,7 +166,7 @@ extension ScanMesh {
         material.diffuse.contents = image
         material.diffuse.wrapS = .clamp
         material.diffuse.wrapT = .clamp
-        material.diffuse.mipFilter = .linear
+        material.diffuse.mipFilter = .none
         material.diffuse.magnificationFilter = .linear
         material.diffuse.minificationFilter = .linear
         material.isDoubleSided = true

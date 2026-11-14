@@ -47,7 +47,6 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
     let mode: ScanMode
     let sceneView = ARSCNView(frame: .zero)
     private let library: ScanLibrary
-    private let keyframes = KeyframeBuffer()
     private let recorder = KeyframeRecorder()
     private var coveredAnchors = Set<UUID>()
     private var lookedUp = false
@@ -144,7 +143,6 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
             startedAt = Date()
         }
         isRecording = true
-        keyframes.setAccepting(true)
         recorder.setAccepting(true)
         if mode == .objectLidar, objectCenter == nil {
             setCenterFromCrosshair()
@@ -155,7 +153,6 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
     func pause() {
         sceneView.session.pause()
         isPaused = true
-        keyframes.setAccepting(false)
         recorder.setAccepting(false)
         speed = 0
     }
@@ -164,14 +161,12 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         sceneView.session.run(configuration, options: [])
         isPaused = false
         if isRecording {
-            keyframes.setAccepting(true)
             recorder.setAccepting(true)
         }
         lastTimestamp = nil
     }
 
     func restart() {
-        keyframes.removeAll()
         recorder.reset()
         coveredAnchors.removeAll()
         lookedUp = false
@@ -200,7 +195,6 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         colorProgress = 0.04
         let signal = WorkSignal()
         finishSignal = signal
-        keyframes.setAccepting(false)
         recorder.setAccepting(false)
         let mode = self.mode
         let center = self.objectCenter
@@ -217,7 +211,7 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
                 }
                 let started = CFAbsoluteTimeGetCurrent()
                 let extracted = self.extractMesh()
-                let frames = self.keyframes.snapshot()
+                let frames: [ColorKeyframe] = []
                 self.sceneView.session.pause()
                 self.isPaused = true
                 self.colorProgress = 0.2
@@ -369,7 +363,6 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
     }
 
     func stop() {
-        keyframes.setAccepting(false)
         recorder.setAccepting(false)
         sceneView.session.pause()
     }
@@ -506,7 +499,6 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
         let tracking = Self.trackingText(frame.camera.trackingState)
         let timestamp = frame.timestamp
         let position = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
-        keyframes.consider(frame)
         if isRecording, !isPaused {
             recorder.consider(frame, maxRange: maxRange, minConfidence: depthConfidence)
         }

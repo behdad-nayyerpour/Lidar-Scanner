@@ -6,13 +6,14 @@ import UIKit
 struct ARScanPreview: View {
     let url: URL?
     let mesh: ScanMesh?
+    let texture: UIImage?
     let colored: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var failed = false
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            ARScanContainer(url: url, mesh: mesh, colored: colored, failed: $failed)
+            ARScanContainer(url: url, mesh: mesh, texture: texture, colored: colored, failed: $failed)
                 .ignoresSafeArea()
             VStack(alignment: .leading, spacing: 10) {
                 Button {
@@ -48,6 +49,7 @@ struct ARScanPreview: View {
 private struct ARScanContainer: UIViewRepresentable {
     let url: URL?
     let mesh: ScanMesh?
+    let texture: UIImage?
     let colored: Bool
     @Binding var failed: Bool
 
@@ -64,21 +66,23 @@ private struct ARScanContainer: UIViewRepresentable {
     func updateUIView(_ uiView: ARView, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(url: url, mesh: mesh, colored: colored, failed: $failed)
+        Coordinator(url: url, mesh: mesh, texture: texture, colored: colored, failed: $failed)
     }
 
     final class Coordinator: NSObject, ARSessionDelegate {
         let url: URL?
         let mesh: ScanMesh?
+        let texture: UIImage?
         let colored: Bool
         var failed: Binding<Bool>
         weak var view: ARView?
         private var placed = false
         private var model: Entity?
 
-        init(url: URL?, mesh: ScanMesh?, colored: Bool, failed: Binding<Bool>) {
+        init(url: URL?, mesh: ScanMesh?, texture: UIImage?, colored: Bool, failed: Binding<Bool>) {
             self.url = url
             self.mesh = mesh
+            self.texture = texture
             self.colored = colored
             self.failed = failed
         }
@@ -118,7 +122,9 @@ private struct ARScanContainer: UIViewRepresentable {
             }
             guard let mesh, !mesh.isEmpty else { throw ScanError.fileMissing }
             let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("usdz")
-            try MeshExporter.usdz(mesh: mesh, baked: nil, to: file, allowBake: false)
+            defer { try? FileManager.default.removeItem(at: file) }
+            if let texture { try MeshExporter.usdzTextured(mesh: mesh, image: texture, to: file) }
+            else { try MeshExporter.usdz(mesh: mesh, baked: nil, to: file, allowBake: false) }
             return try Entity.load(contentsOf: file)
         }
 

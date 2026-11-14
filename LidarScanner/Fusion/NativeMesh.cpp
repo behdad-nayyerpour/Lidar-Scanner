@@ -10,6 +10,7 @@ struct AtlasHooks {
     volatile int *cancel;
     NMReport report;
     void *context;
+    NMShouldCancel shouldCancel;
 };
 
 static bool atlasProgress(xatlas::ProgressCategory category, int progress, void *user) {
@@ -23,6 +24,7 @@ static bool atlasProgress(xatlas::ProgressCategory category, int progress, void 
         hooks->report(percent, hooks->context);
     }
     if (hooks->cancel != nullptr && *hooks->cancel != 0) { return false; }
+    if (hooks->shouldCancel != nullptr && hooks->shouldCancel(hooks->context) != 0) { return false; }
     return true;
 }
 
@@ -34,14 +36,14 @@ static void clearMesh(NMMesh *mesh) {
     memset(mesh, 0, sizeof(NMMesh));
 }
 
-int NMBuildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *indices, uint32_t indexCount, int resolution, volatile int *cancelFlag, NMReport report, void *context, NMMesh *outMesh) {
+static int buildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *indices, uint32_t indexCount, int resolution, volatile int *cancelFlag, NMReport report, void *context, NMMesh *outMesh, NMShouldCancel shouldCancel) {
     if (outMesh == nullptr || positions == nullptr || indices == nullptr || vertexCount == 0 || indexCount < 3 || indexCount % 3 != 0) {
         return 1;
     }
     memset(outMesh, 0, sizeof(NMMesh));
     xatlas::Atlas *atlas = xatlas::Create();
     if (atlas == nullptr) { return 2; }
-    AtlasHooks hooks { cancelFlag, report, context };
+    AtlasHooks hooks { cancelFlag, report, context, shouldCancel };
     xatlas::SetProgressCallback(atlas, atlasProgress, &hooks);
 
     xatlas::MeshDecl decl;
@@ -71,11 +73,11 @@ int NMBuildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *i
     pack.blockAlign = true;
     pack.createImage = false;
     xatlas::Generate(atlas, charts, pack);
-    if (cancelFlag != nullptr && *cancelFlag != 0) {
+    if ((cancelFlag != nullptr && *cancelFlag != 0) || (shouldCancel != nullptr && shouldCancel(context) != 0)) {
         xatlas::Destroy(atlas);
         return 4;
     }
-    if (atlas->meshCount < 1 || atlas->width == 0 || atlas->height == 0) {
+    if (atlas->meshCount != 1 || atlas->atlasCount != 1 || atlas->width == 0 || atlas->height == 0) {
         xatlas::Destroy(atlas);
         return 5;
     }
@@ -111,6 +113,14 @@ int NMBuildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *i
     memcpy(outMesh->indices, mesh.indexArray, sizeof(uint32_t) * mesh.indexCount);
     xatlas::Destroy(atlas);
     return 0;
+}
+
+int NMBuildAtlas(const float *positions, uint32_t vertexCount, const uint32_t *indices, uint32_t indexCount, int resolution, volatile int *cancelFlag, NMReport report, void *context, NMMesh *outMesh) {
+    return buildAtlas(positions, vertexCount, indices, indexCount, resolution, cancelFlag, report, context, outMesh, nullptr);
+}
+
+int NMBuildSurfaceAtlas(const float *positions, uint32_t vertexCount, const uint32_t *indices, uint32_t indexCount, int resolution, NMShouldCancel shouldCancel, void *context, NMMesh *outMesh) {
+    return buildAtlas(positions, vertexCount, indices, indexCount, resolution, nullptr, nullptr, context, outMesh, shouldCancel);
 }
 
 int NMSimplify(const float *positions, uint32_t vertexCount, const uint32_t *indices, uint32_t indexCount, uint32_t targetIndexCount, float maxError, NMMesh *outMesh) {

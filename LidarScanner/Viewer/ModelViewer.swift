@@ -281,6 +281,7 @@ struct ModelViewer: View {
     private var record: ScanRecord? { library.record(scanID) }
     private var quickLookURL: URL? {
         let paths = library.paths(for: scanID)
+        if record?.showingBuilt == true, paths.exists(paths.surfaceAsset) { return nil }
         if record?.showingBuilt == true, paths.exists(paths.builtPreview) { return paths.builtPreview }
         if record?.isProcessed == false, paths.exists(paths.capture) { return paths.capture }
         // With Original selected, use its current mesh rather than a cached Built preview.
@@ -359,7 +360,7 @@ struct ModelViewer: View {
             ExportSheet(scanID: scanID)
         }
         .fullScreenCover(isPresented: $showQuickLook) {
-            ARScanPreview(url: quickLookURL, mesh: model.currentMesh, colored: library.record(scanID)?.isColored == true)
+            ARScanPreview(url: quickLookURL, mesh: model.currentMesh, texture: model.textureImage, colored: library.record(scanID)?.isColored == true)
         }
         .sheet(isPresented: $showAppearance) {
             ViewerAppearanceSheet(model: model)
@@ -585,16 +586,10 @@ struct ModelViewer: View {
         }
         if paths.exists(meshURL) {
             do {
-                let mesh = try await Task.detached(priority: .userInitiated) {
-                    try MeshIO.read(from: meshURL)
+                let surface = try await Task.detached(priority: .userInitiated) {
+                    try SurfaceAsset.load(paths: paths, showingBuilt: record?.showingBuilt == true)
                 }.value
-                var displayed = mesh
-                let textured = record?.showingBuilt == true
-                if textured, let uvs = UVFile.read(from: paths.uvs, expected: mesh.positions.count) {
-                    displayed.uvs = uvs
-                }
-                let texture = textured ? UIImage(contentsOfFile: paths.texture.path) : nil
-                model.show(mesh: displayed, colored: record?.isColored == true, texture: texture)
+                model.show(mesh: surface.mesh, colored: record?.isColored == true, texture: surface.texture)
             } catch {
                 model.errorText = error.localizedDescription
                 model.isLoading = false
@@ -859,26 +854,20 @@ struct ExportSheet: View {
         }
     }
 
-    private func loadMesh() async throws -> ScanMesh {
+    private func loadSurface() async throws -> ScanSurface {
         let paths = library.paths(for: scanID)
-        var mesh: ScanMesh
-        if let loaded = try library.loadMesh(id: scanID) {
-            mesh = loaded
-        } else {
+        let built = library.record(scanID)?.showingBuilt == true
+        return try await Task.detached(priority: .userInitiated) {
+            if paths.exists(paths.mesh) { return try SurfaceAsset.load(paths: paths, showingBuilt: built) }
             let source = paths.exists(paths.capture) ? paths.capture : paths.preview
             guard paths.exists(source) else { throw ScanError.fileMissing }
-            mesh = try USDZExtractor.extract(from: source)
-        }
-        if library.record(scanID)?.showingBuilt == true,
-           let uvs = UVFile.read(from: paths.uvs, expected: mesh.positions.count) {
-            mesh.uvs = uvs
-        }
-        return mesh
+            return ScanSurface(mesh: try USDZExtractor.extract(from: source), texture: nil)
+        }.value
     }
 
-    private func atlasImage() -> UIImage? {
-        guard library.record(scanID)?.showingBuilt == true else { return nil }
-        return UIImage(contentsOfFile: library.paths(for: scanID).texture.path)
+    private func loadMesh() async throws -> ScanMesh {
+        let surface = try await loadSurface()
+        return surface.mesh
     }
 
     private func stage(_ name: String, _ data: Data) throws -> SharePayload {
@@ -899,8 +888,8 @@ struct ExportSheet: View {
     }
 
     private func exportOBJ() async throws {
-        let mesh = try await loadMesh()
-        share = try stage("\(baseName())-obj.zip", try MeshExporter.objPackage(mesh: mesh, baseName: baseName(), atlas: atlasImage()))
+        let surface = try await loadSurface()
+        share = try stage("\(baseName())-obj.zip", try MeshExporter.objPackage(mesh: surface.mesh, baseName: baseName(), atlas: surface.texture))
     }
 
     private func exportSTL() async throws {
@@ -914,11 +903,12 @@ struct ExportSheet: View {
             share = try shareCopy(of: paths.capture, name: "\(baseName()).usdz")
             return
         }
-        let mesh = try await loadMesh()
+        let surface = try await loadSurface()
+        let mesh = surface.mesh
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("\(baseName()).usdz")
-        if let atlas = atlasImage(), mesh.uvs.count == mesh.positions.count {
+        if let atlas = surface.texture, mesh.uvs.count == mesh.positions.count {
             try MeshExporter.usdzTextured(mesh: mesh, image: atlas, to: url)
         } else {
             try MeshExporter.usdz(mesh: mesh, to: url)
@@ -946,18 +936,19 @@ struct ExportSheet: View {
     }
 
     private func exportGLB() async throws {
-        let mesh = try await loadMesh()
-        share = try stage("\(baseName()).glb", try MeshExporter.glbData(mesh: mesh, atlas: atlasImage()))
+        let surface = try await loadSurface()
+        share = try stage("\(baseName()).glb", try MeshExporter.glbData(mesh: surface.mesh, atlas: surface.texture))
     }
 
     private func exportAll() async throws {
-        let mesh = try await loadMesh()
+        let surface = try await loadSurface()
+        let mesh = surface.mesh
         let original = library.paths(for: scanID).capture
         let data = try MeshExporter.allFormatsZip(
             mesh: mesh,
             baseName: baseName(),
             includeOriginalUSDZ: library.paths(for: scanID).exists(original) ? original : nil,
-            atlas: atlasImage()
+            atlas: surface.texture
         )
         share = try stage("\(baseName())-all.zip", data)
     }

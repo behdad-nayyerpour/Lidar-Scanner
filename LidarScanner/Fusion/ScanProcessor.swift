@@ -88,10 +88,10 @@ enum ScanProcessor {
             fillTolerance: tolerance
         ) else {
             Log.scan.info("texture stopped ms=\(ScanTiming.milliseconds(since: textureStarted), privacy: .public)")
-            return BuildResult(mesh: working, texture: nil, notice: notice, replacedGeometry: replaced)
+            return BuildResult(mesh: working, texture: nil, notice: L10n.colorFailed, replacedGeometry: replaced)
         }
         Log.scan.info("texture faces=\(textured.mesh.triangleCount, privacy: .public) ms=\(ScanTiming.milliseconds(since: textureStarted), privacy: .public)")
-        return BuildResult(mesh: textured.mesh, texture: textured.image, notice: notice, replacedGeometry: replaced)
+        return BuildResult(mesh: textured.mesh, texture: textured.image, notice: textured.coverage < 0.9 ? L10n.colorPartial : notice, replacedGeometry: replaced)
     }
 
     /// Smooth and decimate first, then copy original triangles into the holes.
@@ -120,38 +120,5 @@ enum ScanProcessor {
         let coverage = referenceCoverage ?? MeshCoverage.fraction(of: reference, near: fused, tolerance: tolerance)
         if coverage >= 0.55 { return true }
         return MeshCoverage.fraction(of: fused, near: reference, tolerance: tolerance) >= 0.8
-    }
-}
-
-enum UVFile {
-    static func write(_ uvs: [SIMD2<Float>], to url: URL) throws {
-        try encode(uvs).write(to: url, options: .atomic)
-    }
-
-    static func encode(_ uvs: [SIMD2<Float>]) -> Data {
-        var data = Data()
-        data.appendLE(UInt32(uvs.count))
-        for uv in uvs {
-            data.appendLE(uv.x.bitPattern)
-            data.appendLE(uv.y.bitPattern)
-        }
-        return data
-    }
-
-    static func read(from url: URL, expected: Int) -> [SIMD2<Float>]? {
-        guard let data = try? Data(contentsOf: url), data.count >= 4 else { return nil }
-        let count = Int(data.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).littleEndian })
-        guard count == expected, data.count >= 4 + count * 8 else { return nil }
-        var uvs: [SIMD2<Float>] = []
-        uvs.reserveCapacity(count)
-        var cursor = 4
-        for _ in 0..<count {
-            guard cursor + 8 <= data.count else { return nil }
-            let x = data.withUnsafeBytes { Float(bitPattern: UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: cursor, as: UInt32.self))) }
-            let y = data.withUnsafeBytes { Float(bitPattern: UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: cursor + 4, as: UInt32.self))) }
-            uvs.append(SIMD2(x, y))
-            cursor += 8
-        }
-        return uvs
     }
 }
