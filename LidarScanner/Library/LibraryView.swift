@@ -5,6 +5,7 @@ struct RootView: View {
     @State private var selection: UUID?
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var route: CaptureRoute?
+    @State private var pendingRoute: CaptureRoute?
     @State private var showModes = false
     @State private var showSettings = false
     @State private var showTips = false
@@ -21,7 +22,9 @@ struct RootView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .fullScreenCover(isPresented: $showModes) { modeSheet }
+        .fullScreenCover(isPresented: $showModes, onDismiss: {
+            if let pendingRoute { route = pendingRoute; self.pendingRoute = nil }
+        }) { modeSheet }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showTips) { TipsView() }
         .alert(L10n.appName, isPresented: colorNoticePresented) {
@@ -305,10 +308,8 @@ struct RootView: View {
     }
 
     private func start(_ route: CaptureRoute) {
+        pendingRoute = route
         showModes = false
-        DispatchQueue.main.async {
-            self.route = route
-        }
     }
 
     private func delete(_ record: ScanRecord) {

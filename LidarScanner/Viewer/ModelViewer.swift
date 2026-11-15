@@ -17,7 +17,7 @@ final class ViewerModel: NSObject, ObservableObject, SCNSceneRendererDelegate {
     @Published var shaded = false
     @Published var showClasses = false
     @Published var wireframe = false
-    @Published var backdrop: ViewerBackdrop = .dark
+    @Published var backdrop: ViewerBackdrop = .light
     @Published var uncoloredTint: UncoloredTint = .clay
     @Published var customBackdrop = UIColor(red: 0.11, green: 0.13, blue: 0.16, alpha: 1)
     @Published var customTint = UIColor(red: 0.77, green: 0.64, blue: 0.52, alpha: 1)
@@ -737,6 +737,7 @@ struct RepairPreviewSheet: View {
 
     private func updatePreview() {
         let camera = preview.sceneView.pointOfView?.simdTransform
+        preview.uncoloredTint = .white
         preview.show(mesh: showRepaired ? (result?.mesh ?? mesh) : mesh, colored: false)
         if let camera { preview.sceneView.pointOfView?.simdTransform = camera }
     }
