@@ -49,6 +49,7 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
     private let library: ScanLibrary
     private let recorder = KeyframeRecorder()
     private var coveredAnchors = Set<UUID>()
+    private let coverageLock = NSLock()
     private var lookedUp = false
     private var configuration = ARWorldTrackingConfiguration()
     private var sphereNode: SCNNode?
@@ -168,7 +169,9 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
 
     func restart() {
         recorder.reset()
+        coverageLock.lock()
         coveredAnchors.removeAll()
+        coverageLock.unlock()
         lookedUp = false
         movingTooFast = false
         showCeilingHint = false
@@ -471,13 +474,19 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         guard let meshAnchor = anchor as? ARMeshAnchor else { return }
-        node.addChildNode(LiveMeshBuilder.node(for: meshAnchor, style: overlayStyle, covered: coveredAnchors.contains(meshAnchor.identifier)))
+        node.addChildNode(LiveMeshBuilder.node(for: meshAnchor, style: overlayStyle, covered: isCovered(meshAnchor.identifier)))
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let meshAnchor = anchor as? ARMeshAnchor else { return }
         node.childNodes.filter { $0.name == "mesh" }.forEach { $0.removeFromParentNode() }
-        node.addChildNode(LiveMeshBuilder.node(for: meshAnchor, style: overlayStyle, covered: coveredAnchors.contains(meshAnchor.identifier)))
+        node.addChildNode(LiveMeshBuilder.node(for: meshAnchor, style: overlayStyle, covered: isCovered(meshAnchor.identifier)))
+    }
+
+    private func isCovered(_ id: UUID) -> Bool {
+        coverageLock.lock()
+        defer { coverageLock.unlock() }
+        return coveredAnchors.contains(id)
     }
 
     private func markCovered(from frame: ARFrame, forward: SIMD3<Float>) {
@@ -488,7 +497,9 @@ final class RoomScanModel: NSObject, ObservableObject, ARSCNViewDelegate, ARSess
             let distance = simd_length(to)
             guard distance > 0.2, distance < maxRange else { continue }
             if simd_dot(to / distance, forward) > 0.72 {
+                coverageLock.lock()
                 coveredAnchors.insert(anchor.identifier)
+                coverageLock.unlock()
             }
         }
     }

@@ -293,6 +293,22 @@ struct ModelViewer: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if record?.builtAvailable == true {
+                Picker("Model", selection: Binding(
+                    get: { record?.showingBuilt == true },
+                    set: { built in
+                        do {
+                            if built { try library.showBuiltMesh(id: scanID) }
+                            else { try library.showOriginalMesh(id: scanID) }
+                        } catch { alertText = error.localizedDescription }
+                    }
+                )) {
+                    Text("Original").tag(false)
+                    Text("Colored").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .padding(10)
+            }
             ZStack(alignment: .topLeading) {
                 ModelSceneView(model: model)
                 ForEach(model.labels) { label in
@@ -707,7 +723,9 @@ struct RepairPreviewSheet: View {
     }
 
     private func updatePreview() {
+        let camera = preview.sceneView.pointOfView?.simdTransform
         preview.show(mesh: showRepaired ? (result?.mesh ?? mesh) : mesh, colored: false)
+        if let camera { preview.sceneView.pointOfView?.simdTransform = camera }
     }
 }
 
@@ -835,31 +853,57 @@ struct ExportSheet: View {
     @State private var working = false
     @State private var share: SharePayload?
     @State private var errorText: String?
+    @State private var format = "GLB"
 
     var body: some View {
         NavigationStack {
             List {
-                Section(L10n.exportCADUnits) {
+                Section("Format") {
+                    Picker("Choose format", selection: $format) {
+                        Text("3D model · GLB").tag("GLB")
+                        Text("3D model · USDZ").tag("USDZ")
+                        Text("3D model · OBJ").tag("OBJ")
+                        Text("3D printing · STL").tag("STL")
+                        Text("Point cloud · PLY").tag("PLY")
+                        Text("CAD · DXF").tag("DXF")
+                        Text("All exports").tag("ALL")
+                        if library.paths(for: scanID).exists(library.paths(for: scanID).frames) {
+                            Text("Original capture data").tag("FRAMES")
+                        }
+                        if library.paths(for: scanID).exists(library.paths(for: scanID).capture) {
+                            Text("Original USDZ").tag("ORIGINAL")
+                        }
+                    }
+                }
+                if format == "STL" || format == "DXF" {
+                  Section(L10n.exportCADUnits) {
                     Picker(L10n.exportSTLUnits, selection: $millimeters) {
                         Text(L10n.exportMillimeters).tag(true)
                         Text(L10n.exportMeters).tag(false)
                     }
                     .pickerStyle(.segmented)
                     Toggle(L10n.exportZUp, isOn: $zUp)
+                  }
                 }
-                exportRow(L10n.exportPLY, L10n.exportPLYDetail) { try await exportPLY() }
-                exportRow(L10n.exportOBJ, L10n.exportOBJDetail) { try await exportOBJ() }
-                exportRow(L10n.exportSTL, L10n.exportSTLDetail) { try await exportSTL() }
-                exportRow(L10n.exportDXF, L10n.exportDXFDetail) { try await exportDXF() }
-                exportRow(L10n.exportUSDZ, L10n.exportUSDZDetail) { try await exportUSDZ() }
-                exportRow(L10n.exportGLB, L10n.exportGLBDetail) { try await exportGLB() }
-                if library.paths(for: scanID).exists(library.paths(for: scanID).capture) {
-                    exportRow(L10n.exportOriginalUSDZ, L10n.exportOriginalDetail) { try await exportOriginal() }
+                Button {
+                    run {
+                        switch format {
+                        case "USDZ": try await exportUSDZ()
+                        case "OBJ": try await exportOBJ()
+                        case "STL": try await exportSTL()
+                        case "PLY": try await exportPLY()
+                        case "DXF": try await exportDXF()
+                        case "ALL": try await exportAll()
+                        case "FRAMES": try await exportFrames()
+                        case "ORIGINAL": try await exportOriginal()
+                        default: try await exportGLB()
+                        }
+                    }
+                } label: {
+                    Label("Share or Save to Files", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
                 }
-                exportRow(L10n.exportAll, L10n.exportAllDetail) { try await exportAll() }
-                if library.paths(for: scanID).exists(library.paths(for: scanID).frames) {
-                    exportRow(L10n.exportAllData, L10n.exportAllDataDetail) { try await exportFrames() }
-                }
+                .disabled(working)
                 if let errorText {
                     Text(errorText).foregroundStyle(AppColor.danger)
                 }

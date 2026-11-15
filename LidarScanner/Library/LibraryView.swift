@@ -199,6 +199,14 @@ struct RootView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Move slowly", systemImage: "hand.draw")
+                        Label("Keep good light", systemImage: "sun.max")
+                        Label("Cover every side", systemImage: "viewfinder")
+                    }
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 8)
                     if !DeviceCapability.supportsLiDAR {
                         Text(L10n.libraryLidarMissingBody)
                             .font(.subheadline)
