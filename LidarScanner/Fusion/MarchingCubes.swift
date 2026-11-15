@@ -80,9 +80,9 @@ enum MarchingCubes {
                             if abs(span) > 1e-6 { t = va / span }
                             t = min(1, max(0, t))
                             let position = SIMD3<Float>(
-                                Float(baseX + x) + Float(a.x) + t * Float(b.x - a.x),
-                                Float(baseY + y) + Float(a.y) + t * Float(b.y - a.y),
-                                Float(baseZ + z) + Float(a.z) + t * Float(b.z - a.z)
+                                Float(baseX + x) + 0.5 + Float(a.x) + t * Float(b.x - a.x),
+                                Float(baseY + y) + 0.5 + Float(a.y) + t * Float(b.y - a.y),
+                                Float(baseZ + z) + 0.5 + Float(a.z) + t * Float(b.z - a.z)
                             ) * voxel
                             edgeVertex[edge] = positions.count
                             positions.append(position)
