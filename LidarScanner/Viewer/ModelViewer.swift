@@ -293,22 +293,6 @@ struct ModelViewer: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if record?.builtAvailable == true {
-                Picker("Model", selection: Binding(
-                    get: { record?.showingBuilt == true },
-                    set: { built in
-                        do {
-                            if built { try library.showBuiltMesh(id: scanID) }
-                            else { try library.showOriginalMesh(id: scanID) }
-                        } catch { alertText = error.localizedDescription }
-                    }
-                )) {
-                    Text("Original").tag(false)
-                    Text("Colored").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .padding(10)
-            }
             ZStack(alignment: .topLeading) {
                 ModelSceneView(model: model)
                 ForEach(model.labels) { label in
@@ -341,7 +325,40 @@ struct ModelViewer: View {
                     .padding(12)
                 }
             }
-            colorBar
+            Text("Drag to rotate · Pinch to zoom")
+                .font(.caption).foregroundStyle(AppColor.textSecondary).padding(.vertical, 6)
+            if record?.builtAvailable == true {
+                Picker("Model", selection: Binding(
+                    get: { record?.showingBuilt == true },
+                    set: { built in
+                        do {
+                            if built { try library.showBuiltMesh(id: scanID) }
+                            else { try library.showOriginalMesh(id: scanID) }
+                        } catch { alertText = error.localizedDescription }
+                    }
+                )) {
+                    Text("Original").tag(false)
+                    Text("Colored").tag(true)
+                }
+                .pickerStyle(.segmented).padding(.horizontal, 16)
+            }
+            colorBar.padding(.horizontal, 16).padding(.top, 8)
+            Button {
+                if model.canProcess { showProcess = true }
+                else { alertText = L10n.viewerProcessUnavailable }
+            } label: {
+                HStack {
+                    Image(systemName: "cube")
+                    VStack(alignment: .leading) {
+                        Text("Repair geometry").font(.subheadline.bold())
+                        Text("Preview changes before saving").font(.caption)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                }.padding(12).frame(maxWidth: .infinity)
+                    .background(AppColor.elevated, in: RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain).padding(.horizontal, 16).padding(.top, 8)
             bottomBar
         }
         .background(AppColor.background)
@@ -493,10 +510,6 @@ struct ModelViewer: View {
         HStack(spacing: 8) {
             barButton(L10n.viewerMeasure, "ruler", active: model.measuring) {
                 model.measuring.toggle()
-            }
-            barButton("Repair", "bandage", active: false) {
-                if model.canProcess { showProcess = true }
-                else { alertText = L10n.viewerProcessUnavailable }
             }
             barButton(L10n.viewerQuickLook, "arkit", active: false) {
                 showQuickLook = true

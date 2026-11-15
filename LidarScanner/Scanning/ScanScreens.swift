@@ -148,6 +148,7 @@ struct RoomScanScreen: View {
             if showAdvanced {
                 overlayControl
                 highResControls
+                Button(L10n.scanRestart, systemImage: "arrow.counterclockwise") { confirmRestart = true }
             }
             if model.mode == .objectLidar {
                 VStack(alignment: .leading, spacing: 8) {
@@ -170,28 +171,26 @@ struct RoomScanScreen: View {
                 .padding(14)
                 .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
-            HStack(alignment: .bottom, spacing: 22) {
-                ScanRoundButton(systemImage: "arrow.counterclockwise", title: L10n.scanRestart) {
-                    confirmRestart = true
-                }
-                ScanRoundButton(
-                    systemImage: model.isRecording && !model.isPaused ? "pause.fill" : "play.fill",
-                    title: !model.isRecording ? L10n.scanStart : (model.isPaused ? L10n.scanResume : L10n.scanPause),
-                    prominent: !model.isRecording
-                ) {
+            HStack(spacing: 12) {
+                Button {
                     if !model.isRecording { model.startRecording() }
                     else if model.isPaused { model.resume() }
                     else { model.pause() }
+                } label: {
+                    Image(systemName: model.isRecording && !model.isPaused ? "pause.fill" : "play.fill")
+                        .font(.title3.bold()).frame(width: 52, height: 52)
+                        .background(.white.opacity(0.18), in: Circle())
                 }
-                ScanRoundButton(
-                    systemImage: "checkmark",
-                    title: L10n.scanFinish,
-                    prominent: true,
-                    enabled: model.isRecording && model.faceCount > 20 && !model.isProcessing
-                ) {
-                    model.finish()
+                .accessibilityLabel(!model.isRecording ? L10n.scanStart : (model.isPaused ? L10n.scanResume : L10n.scanPause))
+                Button(action: model.finish) {
+                    Text(L10n.scanFinish).font(.headline).frame(maxWidth: .infinity).padding(.vertical, 16)
+                        .background(AppColor.accent, in: RoundedRectangle(cornerRadius: 14))
                 }
+                .disabled(!model.isRecording || model.faceCount <= 20 || model.isProcessing)
             }
+            .foregroundStyle(.white)
+            .padding(12)
+            .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 22))
             if model.mode == .objectLidar {
                 Button(action: model.setCenterFromCrosshair) {
                     Label(L10n.scanSetCenter, systemImage: "scope")

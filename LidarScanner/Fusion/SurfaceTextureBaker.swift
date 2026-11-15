@@ -28,6 +28,7 @@ enum SurfaceTextureBaker {
         let groups = candidateFaces(mesh: mesh, views: views, settings: settings)
         var atlas = AtlasImage(width: size, height: size)
         var weight = [Float16](repeating: 0, count: size * size)
+        var bestWeight = [Float16](repeating: 0, count: size * size)
         var occupied = [Bool](repeating: false, count: size * size)
         mesh.colors = Array(repeating: SIMD3(repeating: 0.72), count: mesh.positions.count)
         var vertexWeight = [Float](repeating: 0, count: mesh.positions.count)
@@ -63,14 +64,20 @@ enum SurfaceTextureBaker {
                     if let old = atlas.get(x, y), oldWeight > 0 {
                         // Reject conflicting colors instead of ghosting an edge across different viewpoints.
                         if simd_distance(old, sample) > 0.25 {
-                            if w > oldWeight { atlas.set(x, y, sample); weight[i] = Float16(w) }
+                            if w > Float(bestWeight[i]) {
+                                atlas.set(x, y, sample)
+                                weight[i] = Float16(w)
+                                bestWeight[i] = Float16(w)
+                            }
                         } else {
                             atlas.set(x, y, (old * oldWeight + sample * w) / (oldWeight + w))
                             weight[i] = Float16(min(100, oldWeight + w))
+                            bestWeight[i] = max(bestWeight[i], Float16(w))
                         }
                     } else {
                         atlas.set(x, y, sample)
                         weight[i] = Float16(w)
+                        bestWeight[i] = Float16(w)
                         painted += 1
                     }
                 }
