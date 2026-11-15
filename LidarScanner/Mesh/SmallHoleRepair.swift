@@ -16,10 +16,24 @@ extension ScanMesh {
             init(_ a: UInt32, _ b: UInt32) { lo = min(a, b); hi = max(a, b) }
         }
         struct Use { var count: Int; var a: UInt32; var b: UInt32 }
+        struct PositionKey: Hashable { let x: Float; let y: Float; let z: Float }
+        // UV unwrapping duplicates vertices on texture seams. Reconnect only
+        // exactly coincident positions for topology; never move the geometry.
+        var canonical: [PositionKey: UInt32] = [:]
+        var remap = [UInt32]()
+        remap.reserveCapacity(positions.count)
+        for (index, p) in positions.enumerated() {
+            let key = PositionKey(x: p.x, y: p.y, z: p.z)
+            let representative = canonical[key] ?? UInt32(index)
+            canonical[key] = representative
+            remap.append(representative)
+        }
         var uses: [Edge: Use] = [:]
         for t in 0..<triangleCount {
-            let ids = Array(indices[(t * 3)..<(t * 3 + 3)])
-            guard ids.allSatisfy({ Int($0) < positions.count }), Set(ids).count == 3 else { continue }
+            let raw = Array(indices[(t * 3)..<(t * 3 + 3)])
+            guard raw.allSatisfy({ Int($0) < positions.count }) else { continue }
+            let ids = raw.map { remap[Int($0)] }
+            guard Set(ids).count == 3 else { continue }
             for i in 0..<3 {
                 let a = ids[i], b = ids[(i + 1) % 3], key = Edge(a, b)
                 if var use = uses[key] { use.count += 1; uses[key] = use }
