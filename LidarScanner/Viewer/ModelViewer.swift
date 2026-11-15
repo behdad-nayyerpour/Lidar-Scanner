@@ -675,6 +675,7 @@ struct RepairPreviewSheet: View {
     @State private var showRepaired = true
     @State private var preserveEdges = true
     @State private var working = false
+    @State private var reconstructed = false
     @State private var saved = false
     @State private var error: String?
 
@@ -687,12 +688,20 @@ struct RepairPreviewSheet: View {
                 }.pickerStyle(.segmented).padding(.horizontal)
                 ModelSceneView(model: preview)
                 if let result {
-                    Text("Small holes filled: \(result.filled)")
+                    Text(reconstructed ? "Rebuilt from captured depth" : "Small holes filled: \(result.filled)")
                         .font(.subheadline.weight(.semibold))
                 }
                 Text("Large gaps need another scan. The copy starts without texture; use Add Color to color its new geometry.")
                     .font(.footnote).foregroundStyle(.secondary).padding(.horizontal)
-                Toggle("Preserve edges", isOn: $preserveEdges).padding(.horizontal)
+                Toggle("Preserve edges", isOn: $preserveEdges).disabled(working).padding(.horizontal)
+                if library.record(scanID)?.hasKeyframes == true {
+                    Button("Rebuild from captured depth", systemImage: "square.stack.3d.up") {
+                        Task { await rebuildFromDepth() }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(working)
+                    .padding(.horizontal)
+                }
                 Button {
                     guard let result else { return }
                     working = true
@@ -705,7 +714,7 @@ struct RepairPreviewSheet: View {
                     Text("Save as a copy").frame(maxWidth: .infinity).padding(14)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(working || result == nil || result?.filled == 0)
+                .disabled(working || result == nil || (result?.filled == 0 && !reconstructed))
                 .padding(.horizontal)
             }
             .navigationTitle("Repair geometry")
@@ -724,6 +733,7 @@ struct RepairPreviewSheet: View {
 
     private func calculate() async {
         working = true
+        reconstructed = false
         let source = mesh
         let preserve = preserveEdges
         let repaired = await Task.detached(priority: .userInitiated) {
@@ -733,6 +743,40 @@ struct RepairPreviewSheet: View {
         result = repaired
         updatePreview()
         working = false
+    }
+
+    private func rebuildFromDepth() async {
+        working = true
+        let paths = library.paths(for: scanID)
+        let source = mesh
+        let record = library.record(scanID)
+        let center: SIMD3<Float>? = record?.objectCenter.flatMap { values in
+            values.count == 3 ? SIMD3(values[0], values[1], values[2]) : nil
+        }
+        let radius = record?.objectRadius ?? 0
+        let candidate = await Task.detached(priority: .userInitiated) { () -> ScanMesh? in
+            guard let frames = try? KeyframeArchive.readManifest(in: paths.frames), !frames.isEmpty else { return nil }
+            var settings = FusionSettings.balanced
+            let range = FusionVoxel.medianDepth(directory: paths.frames, frames: frames)
+            let detail = FusionVoxel.millimeters(requested: settings.voxelMillimeters, frames: frames, range: range)
+            settings.voxelMillimeters = FusionVoxel.budgetedMillimeters(detail: detail, surfaceArea: source.surfaceArea())
+            if center != nil { settings.maxRange = FusionVoxel.integrationRange(subject: range, requested: settings.maxRange) }
+            let fused = TSDFFusion.fuse(directory: paths.frames, frames: frames, settings: settings,
+                                        objectCenter: center, objectRadius: radius, signal: nil, progress: nil)
+            let tolerance = max(0.04, settings.voxelSize * 4)
+            guard ScanProcessor.canUseFusion(fused, reference: source, tolerance: tolerance) else { return nil }
+            return ScanProcessor.closeGaps(in: fused, reference: source, settings: settings,
+                                           tolerance: max(0.012, settings.voxelSize * 4)).mesh
+        }.value
+        working = false
+        guard let candidate, !candidate.isEmpty else {
+            error = "The captured depth did not produce a sufficiently aligned mesh. Your original scan is unchanged."
+            return
+        }
+        result = HoleRepairResult(mesh: candidate, filled: 0)
+        reconstructed = true
+        showRepaired = true
+        updatePreview()
     }
 
     private func updatePreview() {

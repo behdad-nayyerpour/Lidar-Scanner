@@ -2,6 +2,19 @@ import XCTest
 @testable import LidarScanner
 
 final class PartialFusionTests: XCTestCase {
+    func testCoverageUsesTriangleSurfaceNotOnlyVertices() {
+        var coarse = ScanMesh()
+        coarse.positions = [SIMD3(0, 0, 0), SIMD3(2, 0, 0), SIMD3(0, 2, 0)]
+        coarse.indices = [0, 1, 2]
+        var small = ScanMesh()
+        small.positions = [SIMD3(0.8, 0.6, 0.005), SIMD3(0.9, 0.6, 0.005), SIMD3(0.8, 0.7, 0.005)]
+        small.indices = [0, 1, 2]
+        XCTAssertEqual(MeshCoverage.fraction(of: small, near: coarse, tolerance: 0.01), 1)
+        XCTAssertEqual(MeshCoverage.fraction(of: small, near: coarse, tolerance: 0.001), 0)
+        let combined = MeshCoverage.fillingGaps(fused: coarse, reference: small, tolerance: 0.01)
+        XCTAssertEqual(combined.triangleCount, 1)
+    }
+
     func testAlignedPartialCaptureRefinesInsteadOfDiscardingTheEntireBuild() {
         let reference = wall(columns: 200)
         let partial = wall(columns: 20)
