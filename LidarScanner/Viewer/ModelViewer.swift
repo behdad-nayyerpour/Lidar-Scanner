@@ -272,7 +272,6 @@ struct ModelViewer: View {
     @State private var showAppearance = false
     @State private var showStats = false
     @State private var showQuality = false
-    @State private var offeredQuality = false
     @State private var loadGeneration = 0
     @State private var confirmRevert = false
     @State private var renameText = ""
@@ -341,11 +340,6 @@ struct ModelViewer: View {
             Task { await load() }
         }
         .onAppear {
-            if !offeredQuality, library.record(scanID)?.hasKeyframes == true,
-               (library.record(scanID)?.qualityApplied != true || !library.paths(for: scanID).exists(library.paths(for: scanID).surfaceAsset)) {
-                offeredQuality = true
-                showQuality = true
-            }
             model.measurements = library.measurements(id: scanID)
             model.onMeasurementsChange = { measurements in
                 try? library.saveMeasurements(id: scanID, measurements)
@@ -353,9 +347,7 @@ struct ModelViewer: View {
         }
         .sheet(isPresented: $showProcess) {
             if let mesh = modelMesh {
-                ProcessingSheet(mesh: mesh) { updated in
-                    apply(updated)
-                }
+                RepairPreviewSheet(scanID: scanID, mesh: mesh)
             }
         }
         .sheet(isPresented: $showExport) {
@@ -412,7 +404,6 @@ struct ModelViewer: View {
                 Toggle(L10n.viewerWire, isOn: $model.wireframe)
                 Button(L10n.viewerAppearance, systemImage: "paintpalette") { showAppearance = true }
                 if record?.hasKeyframes == true {
-                    Button(L10n.qualityRefine, systemImage: "square.stack.3d.up") { showQuality = true }
                     Button(L10n.qualityRetexture, systemImage: "paintbrush.pointed") {
                         var settings = FusionSettings.fast
                         settings.maxRange = 5
@@ -487,7 +478,7 @@ struct ModelViewer: View {
             barButton(L10n.viewerMeasure, "ruler", active: model.measuring) {
                 model.measuring.toggle()
             }
-            barButton(L10n.viewerProcess, "slider.horizontal.3", active: false) {
+            barButton("Repair", "bandage", active: false) {
                 if model.canProcess { showProcess = true }
                 else { alertText = L10n.viewerProcessUnavailable }
             }
@@ -642,6 +633,81 @@ extension ViewerModel {
         boundsSize = mesh.boundingBox().size
         canProcess = true
         self.mesh = mesh
+    }
+}
+
+struct RepairPreviewSheet: View {
+    let scanID: UUID
+    let mesh: ScanMesh
+    @EnvironmentObject private var library: ScanLibrary
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var preview = ViewerModel()
+    @State private var result: HoleRepairResult?
+    @State private var showRepaired = true
+    @State private var preserveEdges = true
+    @State private var working = false
+    @State private var saved = false
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 12) {
+                Picker("Preview", selection: $showRepaired) {
+                    Text("Original").tag(false)
+                    Text("Repaired").tag(true)
+                }.pickerStyle(.segmented).padding(.horizontal)
+                ModelSceneView(model: preview)
+                if let result {
+                    Text("Small holes filled: \(result.filled)")
+                        .font(.subheadline.weight(.semibold))
+                }
+                Text("Large gaps need another scan. The copy starts without texture; use Add Color to color its new geometry.")
+                    .font(.footnote).foregroundStyle(.secondary).padding(.horizontal)
+                Toggle("Preserve edges", isOn: $preserveEdges).padding(.horizontal)
+                Button {
+                    guard let result else { return }
+                    working = true
+                    Task {
+                        do { _ = try await library.saveRepairCopy(sourceID: scanID, mesh: result.mesh); saved = true }
+                        catch { self.error = error.localizedDescription }
+                        working = false
+                    }
+                } label: {
+                    Text("Save as a copy").frame(maxWidth: .infinity).padding(14)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(working || result == nil || result?.filled == 0)
+                .padding(.horizontal)
+            }
+            .navigationTitle("Repair geometry")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .overlay { if working { ProgressView().padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+            .task { await calculate() }
+            .onChange(of: preserveEdges) { _, _ in Task { await calculate() } }
+            .onChange(of: showRepaired) { _, _ in updatePreview() }
+            .alert("Copy saved", isPresented: $saved) { Button("OK") { dismiss() } } message: { Text("Find the repaired copy in Your Scans.") }
+            .alert("Error", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                Button("OK") { error = nil }
+            } message: { Text(error ?? "") }
+        }
+    }
+
+    private func calculate() async {
+        working = true
+        let source = mesh
+        let preserve = preserveEdges
+        let repaired = await Task.detached(priority: .userInitiated) {
+            source.repairingSmallHoles(preserveEdges: preserve)
+        }.value
+        guard preserve == preserveEdges else { return }
+        result = repaired
+        updatePreview()
+        working = false
+    }
+
+    private func updatePreview() {
+        preview.show(mesh: showRepaired ? (result?.mesh ?? mesh) : mesh, colored: false)
     }
 }
 

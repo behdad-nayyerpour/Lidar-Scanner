@@ -35,6 +35,8 @@ struct RoomScanScreen: View {
     @AppStorage("measurementUnit") private var unitRaw = MeasurementUnit.meters.rawValue
     var onFinished: (UUID) -> Void
     @State private var confirmDiscard = false
+    @State private var showAdvanced = false
+    @State private var confirmRestart = false
 
     init(mode: ScanMode, library: ScanLibrary, onFinished: @escaping (UUID) -> Void) {
         self.onFinished = onFinished
@@ -60,6 +62,10 @@ struct RoomScanScreen: View {
             }
         }
         .preferredColorScheme(.dark)
+        .confirmationDialog(L10n.scanRestart, isPresented: $confirmRestart, titleVisibility: .visible) {
+            Button(L10n.scanRestart, role: .destructive) { model.restart() }
+            Button(L10n.libraryCancel, role: .cancel) {}
+        }
         .interactiveDismissDisabled(true)
         .onAppear {
             model.prepare()
@@ -126,7 +132,12 @@ struct RoomScanScreen: View {
                 HUDCapsule(text: unit.formatArea(model.surfaceArea), systemImage: "square.dashed")
                 HUDCapsule(text: compactCount(model.faceCount), systemImage: "triangle")
                 Spacer(minLength: 0)
-                overlayControl
+                Button { showAdvanced.toggle() } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .frame(width: 44, height: 44)
+                        .background(.black.opacity(0.35), in: Circle())
+                }
+                .accessibilityLabel("Scan settings")
             }
             Spacer()
             HUDCapsule(
@@ -134,7 +145,8 @@ struct RoomScanScreen: View {
                 systemImage: model.guidance.tone == .good ? "checkmark" : "info.circle",
                 tone: model.guidance.tone
             )
-            if model.highResolution {
+            if showAdvanced {
+                overlayControl
                 highResControls
             }
             if model.mode == .objectLidar {
@@ -160,7 +172,7 @@ struct RoomScanScreen: View {
             }
             HStack(alignment: .bottom, spacing: 22) {
                 ScanRoundButton(systemImage: "arrow.counterclockwise", title: L10n.scanRestart) {
-                    model.restart()
+                    confirmRestart = true
                 }
                 ScanRoundButton(
                     systemImage: model.isRecording && !model.isPaused ? "pause.fill" : "play.fill",
@@ -261,7 +273,7 @@ struct RoomScanScreen: View {
 
     private var overlayControl: some View {
         HStack(spacing: 0) {
-            ForEach(ScanOverlayStyle.allCases) { style in
+            ForEach([ScanOverlayStyle.wireAndFill, .fill, .hidden]) { style in
                 Button {
                     model.setOverlayStyle(style)
                 } label: {

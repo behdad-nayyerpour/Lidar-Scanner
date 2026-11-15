@@ -39,6 +39,21 @@ struct RootView: View {
 
     private var sidebar: some View {
         List(selection: $selection) {
+            Button { showModes = true } label: {
+                Label(L10n.libraryNewScan, systemImage: "plus.circle.fill")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .foregroundStyle(AppColor.onAccent)
+            .listRowBackground(AppColor.accent)
+            Picker("Scan type", selection: $scanFilter) {
+                Text("All").tag(0)
+                Text("Rooms").tag(1)
+                Text("Objects").tag(2)
+            }
+            .pickerStyle(.segmented)
+            .listRowBackground(Color.clear)
             if !DeviceCapability.supportsLiDAR {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(L10n.libraryLidarMissingTitle).font(.headline)
@@ -123,14 +138,17 @@ struct RootView: View {
     }
 
     @State private var query = ""
+    @State private var scanFilter = 0
     @State private var renameTarget: ScanRecord?
     @State private var renameText = ""
     @State private var deleteTarget: ScanRecord?
 
     private var filtered: [ScanRecord] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return library.records }
-        return library.records.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
+        return library.records.filter { record in
+            let matchesType = scanFilter == 0 || (scanFilter == 1 && record.mode == .room) || (scanFilter == 2 && record.mode != .room)
+            return matchesType && (trimmed.isEmpty || record.name.localizedCaseInsensitiveContains(trimmed))
+        }
     }
 
     private var renamePresented: Binding<Bool> {
