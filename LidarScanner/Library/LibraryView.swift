@@ -5,9 +5,11 @@ struct RootView: View {
     @State private var selection: UUID?
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var route: CaptureRoute?
+    @State private var pendingRoute: CaptureRoute?
     @State private var showModes = false
     @State private var showSettings = false
     @State private var showTips = false
+    @State private var selectedMode: CaptureRoute = .room
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -20,7 +22,9 @@ struct RootView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .sheet(isPresented: $showModes) { modeSheet }
+        .fullScreenCover(isPresented: $showModes, onDismiss: {
+            if let pendingRoute { route = pendingRoute; self.pendingRoute = nil }
+        }) { modeSheet }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showTips) { TipsView() }
         .alert(L10n.appName, isPresented: colorNoticePresented) {
@@ -39,6 +43,40 @@ struct RootView: View {
 
     private var sidebar: some View {
         List(selection: $selection) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Your scans").font(.largeTitle.bold())
+                Text("Everything stays on your iPhone.")
+                    .font(.subheadline).foregroundStyle(AppColor.textSecondary)
+            }
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            Button { showModes = true } label: {
+                Label(L10n.libraryNewScan, systemImage: "plus")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .foregroundStyle(AppColor.onAccent)
+            .listRowBackground(AppColor.accent)
+            .listRowSeparator(.hidden)
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundStyle(AppColor.textSecondary)
+                TextField(L10n.librarySearch, text: $query)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            .padding(12)
+            .background(AppColor.elevated, in: RoundedRectangle(cornerRadius: 12))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            Picker("Scan type", selection: $scanFilter) {
+                Text("All").tag(0)
+                Text("Rooms").tag(1)
+                Text("Objects").tag(2)
+            }
+            .pickerStyle(.segmented)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
             if !DeviceCapability.supportsLiDAR {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(L10n.libraryLidarMissingTitle).font(.headline)
@@ -65,6 +103,7 @@ struct RootView: View {
                 )
                     .tag(record.id)
                     .listRowBackground(AppColor.surface)
+                    .listRowSeparator(.hidden)
                     .swipeActions {
                         Button(role: .destructive) { delete(record) } label: {
                             Label(L10n.libraryDelete, systemImage: "trash")
@@ -100,9 +139,24 @@ struct RootView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(AppColor.background)
-        .navigationTitle(L10n.libraryTitle)
-        .searchable(text: $query, prompt: L10n.librarySearch)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                Label("Scans", systemImage: "folder").foregroundStyle(AppColor.accent)
+                Spacer()
+                Button { showModes = true } label: {
+                    Image(systemName: "plus").font(.title2.bold()).foregroundStyle(AppColor.onAccent)
+                        .frame(width: 48, height: 48).background(AppColor.accent, in: Circle())
+                }
+                Spacer()
+                Button { showTips = true } label: { Label("Help", systemImage: "questionmark.circle") }
+                    .foregroundStyle(AppColor.textPrimary)
+            }
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 30).padding(.vertical, 8)
+            .background(AppColor.surface)
+        }
         .alert(L10n.libraryRename, isPresented: renamePresented) {
             TextField(L10n.libraryRenamePrompt, text: $renameText)
             Button(L10n.librarySave) { commitRename() }
@@ -123,14 +177,17 @@ struct RootView: View {
     }
 
     @State private var query = ""
+    @State private var scanFilter = 0
     @State private var renameTarget: ScanRecord?
     @State private var renameText = ""
     @State private var deleteTarget: ScanRecord?
 
     private var filtered: [ScanRecord] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return library.records }
-        return library.records.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
+        return library.records.filter { record in
+            let matchesType = scanFilter == 0 || (scanFilter == 1 && record.mode == .room) || (scanFilter == 2 && record.mode != .room)
+            return matchesType && (trimmed.isEmpty || record.name.localizedCaseInsensitiveContains(trimmed))
+        }
     }
 
     private var renamePresented: Binding<Bool> {
@@ -180,52 +237,79 @@ struct RootView: View {
     private var modeSheet: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("What are you scanning?")
+                        .font(.largeTitle.bold())
+                        .fixedSize(horizontal: false, vertical: true)
                     if !DeviceCapability.supportsLiDAR {
                         Text(L10n.libraryLidarMissingBody)
                             .font(.subheadline)
                             .foregroundStyle(AppColor.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    ModeCard(
-                        title: L10n.modeRoomTitle,
-                        bodyText: L10n.modeRoomBody,
-                        systemImage: "square.split.bottomrightquarter",
-                        enabled: DeviceCapability.supportsLiDAR
-                    ) { start(.room) }
-                    ModeCard(
-                        title: L10n.modeObjectLidarTitle,
-                        bodyText: L10n.modeObjectLidarBody,
-                        systemImage: "circle.dashed",
-                        enabled: DeviceCapability.supportsLiDAR
-                    ) { start(.objectLidar) }
-                    ModeCard(
-                        title: L10n.modeObjectPhotoTitle,
-                        bodyText: L10n.modeObjectPhotoBody,
-                        systemImage: "camera.viewfinder",
-                        enabled: DeviceCapability.supportsObjectCapture,
-                        footnote: DeviceCapability.supportsObjectCapture ? nil : L10n.modeObjectPhotoUnavailable
-                    ) { start(.objectPhoto) }
+                    modeChoice(.room, title: "Room", detail: "Capture a space", icon: "square.split.bottomrightquarter")
+                    modeChoice(.objectLidar, title: "Object", detail: "Capture one item", icon: "shippingbox")
+                    Text("Before you start").font(.headline).padding(.top, 12)
+                    instruction("Move slowly", "Sweep around at a steady pace.", "figure.walk")
+                    instruction("Keep good light", "A well-lit space captures better.", "sun.max")
+                    instruction("Cover every side", "Walk around to capture the whole area.", "cube")
                 }
                 .padding(20)
             }
             .background(AppColor.background)
-            .navigationTitle(L10n.libraryNewScan)
+            .safeAreaInset(edge: .bottom) {
+                PrimaryButton(title: "Start scanning") { start(selectedMode) }
+                    .disabled(!DeviceCapability.supportsLiDAR)
+                    .padding(20).background(AppColor.background)
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.commonClose) { showModes = false }
+                    Button { showModes = false } label: { Image(systemName: "chevron.left") }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    if DeviceCapability.supportsObjectCapture {
+                        Button("Photo capture") { start(.objectPhoto) }
+                    }
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+    }
+
+    private func modeChoice(_ mode: CaptureRoute, title: String, detail: String, icon: String) -> some View {
+        Button { selectedMode = mode } label: {
+            HStack(spacing: 16) {
+                Image(systemName: icon).font(.largeTitle).frame(width: 62)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).font(.headline)
+                    Text(detail).font(.subheadline).foregroundStyle(AppColor.textSecondary)
+                }
+                Spacer()
+                Image(systemName: selectedMode == mode ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(selectedMode == mode ? AppColor.accent : AppColor.textSecondary)
+            }
+            .foregroundStyle(AppColor.textPrimary)
+            .padding(18)
+            .background(selectedMode == mode ? AppColor.accent.opacity(0.08) : AppColor.surface,
+                        in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(selectedMode == mode ? AppColor.accent : AppColor.separator))
+        }.buttonStyle(.plain)
+    }
+
+    private func instruction(_ title: String, _ detail: String, _ icon: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon).font(.title2).frame(width: 50, height: 50)
+                .background(AppColor.elevated, in: RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.subheadline.bold())
+                Text(detail).font(.caption).foregroundStyle(AppColor.textSecondary)
+            }
+        }
     }
 
     private func start(_ route: CaptureRoute) {
+        pendingRoute = route
         showModes = false
-        DispatchQueue.main.async {
-            self.route = route
-        }
     }
 
     private func delete(_ record: ScanRecord) {
@@ -299,7 +383,7 @@ struct ScanRow: View {
                     .foregroundStyle(AppColor.accent)
             }
         }
-        .frame(width: 64, height: 64)
+        .frame(width: 126, height: 100)
         .background(AppColor.elevated)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }

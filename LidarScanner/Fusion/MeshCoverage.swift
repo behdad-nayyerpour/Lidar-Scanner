@@ -1,14 +1,14 @@
 import simd
 
 enum MeshCoverage {
-    /// Fraction of reference triangle centers that sit within `tolerance` of some candidate vertex.
+    /// Fraction of reference triangle centers close to the candidate surface.
     static func fraction(of reference: ScanMesh, near candidate: ScanMesh, tolerance: Float) -> Float {
         let points = centers(of: reference, limit: 5000)
         guard !points.isEmpty else { return 1 }
         guard !candidate.positions.isEmpty else { return 0 }
-        let index = PointIndex(points: candidate.positions, cell: max(tolerance, 0.01))
+        let index = TriangleSurfaceIndex(mesh: candidate)
         var hits = 0
-        for point in points where index.distance(to: point) <= tolerance {
+        for point in points where index.containsSurface(near: point, tolerance: tolerance) {
             hits += 1
         }
         return Float(hits) / Float(points.count)
@@ -28,6 +28,7 @@ enum MeshCoverage {
             usedVertex.append(vertex)
         }
         let index = PointIndex(points: used, cell: max(tolerance, 0.01))
+        let surface = TriangleSurfaceIndex(mesh: fused)
         var mesh = fused
         for triangle in 0..<reference.triangleCount {
             let i0 = Int(reference.indices[triangle * 3])
@@ -40,7 +41,7 @@ enum MeshCoverage {
             let center = (a + b + c) / 3
             // A parallel sheet a centimeter off the fused surface is not a hole. Only an opening
             // whose center is farther than `tolerance` gets filled, and rim vertices snap onto the fused mesh.
-            if index.distance(to: center) <= tolerance { continue }
+            if surface.containsSurface(near: center, tolerance: tolerance) { continue }
             let geometric = simd_cross(b - a, c - a)
             let authored = i0 < reference.normals.count ? reference.normals[i0] : geometric
             let flip = simd_length(authored) > 1e-4 && simd_dot(geometric, authored) < 0

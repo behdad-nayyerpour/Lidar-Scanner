@@ -17,7 +17,7 @@ final class ViewerModel: NSObject, ObservableObject, SCNSceneRendererDelegate {
     @Published var shaded = false
     @Published var showClasses = false
     @Published var wireframe = false
-    @Published var backdrop: ViewerBackdrop = .dark
+    @Published var backdrop: ViewerBackdrop = .light
     @Published var uncoloredTint: UncoloredTint = .clay
     @Published var customBackdrop = UIColor(red: 0.11, green: 0.13, blue: 0.16, alpha: 1)
     @Published var customTint = UIColor(red: 0.77, green: 0.64, blue: 0.52, alpha: 1)
@@ -272,7 +272,6 @@ struct ModelViewer: View {
     @State private var showAppearance = false
     @State private var showStats = false
     @State private var showQuality = false
-    @State private var offeredQuality = false
     @State private var loadGeneration = 0
     @State private var confirmRevert = false
     @State private var renameText = ""
@@ -326,7 +325,40 @@ struct ModelViewer: View {
                     .padding(12)
                 }
             }
-            colorBar
+            Text("Drag to rotate · Pinch to zoom")
+                .font(.caption).foregroundStyle(AppColor.textSecondary).padding(.vertical, 6)
+            if record?.builtAvailable == true {
+                Picker("Model", selection: Binding(
+                    get: { record?.showingBuilt == true },
+                    set: { built in
+                        do {
+                            if built { try library.showBuiltMesh(id: scanID) }
+                            else { try library.showOriginalMesh(id: scanID) }
+                        } catch { alertText = error.localizedDescription }
+                    }
+                )) {
+                    Text("Original").tag(false)
+                    Text("Colored").tag(true)
+                }
+                .pickerStyle(.segmented).padding(.horizontal, 16)
+            }
+            colorBar.padding(.horizontal, 16).padding(.top, 8)
+            Button {
+                if model.canProcess { showProcess = true }
+                else { alertText = L10n.viewerProcessUnavailable }
+            } label: {
+                HStack {
+                    Image(systemName: "cube")
+                    VStack(alignment: .leading) {
+                        Text("Repair geometry").font(.subheadline.bold())
+                        Text("Preview changes before saving").font(.caption)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                }.padding(12).frame(maxWidth: .infinity)
+                    .background(AppColor.elevated, in: RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain).padding(.horizontal, 16).padding(.top, 8)
             bottomBar
         }
         .background(AppColor.background)
@@ -341,11 +373,6 @@ struct ModelViewer: View {
             Task { await load() }
         }
         .onAppear {
-            if !offeredQuality, library.record(scanID)?.hasKeyframes == true,
-               (library.record(scanID)?.qualityApplied != true || !library.paths(for: scanID).exists(library.paths(for: scanID).surfaceAsset)) {
-                offeredQuality = true
-                showQuality = true
-            }
             model.measurements = library.measurements(id: scanID)
             model.onMeasurementsChange = { measurements in
                 try? library.saveMeasurements(id: scanID, measurements)
@@ -353,9 +380,7 @@ struct ModelViewer: View {
         }
         .sheet(isPresented: $showProcess) {
             if let mesh = modelMesh {
-                ProcessingSheet(mesh: mesh) { updated in
-                    apply(updated)
-                }
+                RepairPreviewSheet(scanID: scanID, mesh: mesh)
             }
         }
         .sheet(isPresented: $showExport) {
@@ -412,7 +437,6 @@ struct ModelViewer: View {
                 Toggle(L10n.viewerWire, isOn: $model.wireframe)
                 Button(L10n.viewerAppearance, systemImage: "paintpalette") { showAppearance = true }
                 if record?.hasKeyframes == true {
-                    Button(L10n.qualityRefine, systemImage: "square.stack.3d.up") { showQuality = true }
                     Button(L10n.qualityRetexture, systemImage: "paintbrush.pointed") {
                         var settings = FusionSettings.fast
                         settings.maxRange = 5
@@ -486,10 +510,6 @@ struct ModelViewer: View {
         HStack(spacing: 8) {
             barButton(L10n.viewerMeasure, "ruler", active: model.measuring) {
                 model.measuring.toggle()
-            }
-            barButton(L10n.viewerProcess, "slider.horizontal.3", active: false) {
-                if model.canProcess { showProcess = true }
-                else { alertText = L10n.viewerProcessUnavailable }
             }
             barButton(L10n.viewerQuickLook, "arkit", active: false) {
                 showQuickLook = true
@@ -645,6 +665,128 @@ extension ViewerModel {
     }
 }
 
+struct RepairPreviewSheet: View {
+    let scanID: UUID
+    let mesh: ScanMesh
+    @EnvironmentObject private var library: ScanLibrary
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var preview = ViewerModel()
+    @State private var result: HoleRepairResult?
+    @State private var showRepaired = true
+    @State private var preserveEdges = true
+    @State private var working = false
+    @State private var reconstructed = false
+    @State private var saved = false
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 12) {
+                Picker("Preview", selection: $showRepaired) {
+                    Text("Original").tag(false)
+                    Text("Repaired").tag(true)
+                }.pickerStyle(.segmented).padding(.horizontal)
+                ModelSceneView(model: preview)
+                if let result {
+                    Text(reconstructed ? "Rebuilt from captured depth" : "Small holes filled: \(result.filled)")
+                        .font(.subheadline.weight(.semibold))
+                }
+                Text("Large gaps need another scan. The copy starts without texture; use Add Color to color its new geometry.")
+                    .font(.footnote).foregroundStyle(.secondary).padding(.horizontal)
+                Toggle("Preserve edges", isOn: $preserveEdges).disabled(working).padding(.horizontal)
+                if library.record(scanID)?.hasKeyframes == true {
+                    Button("Rebuild from captured depth", systemImage: "square.stack.3d.up") {
+                        Task { await rebuildFromDepth() }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(working)
+                    .padding(.horizontal)
+                }
+                Button {
+                    guard let result else { return }
+                    working = true
+                    Task {
+                        do { _ = try await library.saveRepairCopy(sourceID: scanID, mesh: result.mesh); saved = true }
+                        catch { self.error = error.localizedDescription }
+                        working = false
+                    }
+                } label: {
+                    Text("Save as a copy").frame(maxWidth: .infinity).padding(14)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(working || result == nil || (result?.filled == 0 && !reconstructed))
+                .padding(.horizontal)
+            }
+            .navigationTitle("Repair geometry")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .overlay { if working { ProgressView().padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+            .task { await calculate() }
+            .onChange(of: preserveEdges) { _, _ in Task { await calculate() } }
+            .onChange(of: showRepaired) { _, _ in updatePreview() }
+            .alert("Copy saved", isPresented: $saved) { Button("OK") { dismiss() } } message: { Text("Find the repaired copy in Your Scans.") }
+            .alert("Error", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                Button("OK") { error = nil }
+            } message: { Text(error ?? "") }
+        }
+    }
+
+    private func calculate() async {
+        working = true
+        reconstructed = false
+        let source = mesh
+        let preserve = preserveEdges
+        let repaired = await Task.detached(priority: .userInitiated) {
+            source.repairingSmallHoles(preserveEdges: preserve)
+        }.value
+        guard preserve == preserveEdges else { return }
+        result = repaired
+        updatePreview()
+        working = false
+    }
+
+    private func rebuildFromDepth() async {
+        working = true
+        let paths = library.paths(for: scanID)
+        let source = mesh
+        let record = library.record(scanID)
+        let center: SIMD3<Float>? = record?.objectCenter.flatMap { values in
+            values.count == 3 ? SIMD3(values[0], values[1], values[2]) : nil
+        }
+        let radius = record?.objectRadius ?? 0
+        let candidate = await Task.detached(priority: .userInitiated) { () -> ScanMesh? in
+            guard let frames = try? KeyframeArchive.readManifest(in: paths.frames), !frames.isEmpty else { return nil }
+            var settings = FusionSettings.balanced
+            let range = FusionVoxel.medianDepth(directory: paths.frames, frames: frames)
+            let detail = FusionVoxel.millimeters(requested: settings.voxelMillimeters, frames: frames, range: range)
+            settings.voxelMillimeters = FusionVoxel.budgetedMillimeters(detail: detail, surfaceArea: source.surfaceArea())
+            if center != nil { settings.maxRange = FusionVoxel.integrationRange(subject: range, requested: settings.maxRange) }
+            let fused = TSDFFusion.fuse(directory: paths.frames, frames: frames, settings: settings,
+                                        objectCenter: center, objectRadius: radius, signal: nil, progress: nil)
+            let tolerance = max(0.04, settings.voxelSize * 4)
+            guard ScanProcessor.canUseFusion(fused, reference: source, tolerance: tolerance) else { return nil }
+            return ScanProcessor.closeGaps(in: fused, reference: source, settings: settings,
+                                           tolerance: max(0.012, settings.voxelSize * 4)).mesh
+        }.value
+        working = false
+        guard let candidate, !candidate.isEmpty else {
+            error = "The captured depth did not produce a sufficiently aligned mesh. Your original scan is unchanged."
+            return
+        }
+        result = HoleRepairResult(mesh: candidate, filled: 0)
+        reconstructed = true
+        showRepaired = true
+        updatePreview()
+    }
+
+    private func updatePreview() {
+        let camera = preview.sceneView.pointOfView?.simdTransform
+        preview.uncoloredTint = .white
+        preview.show(mesh: showRepaired ? (result?.mesh ?? mesh) : mesh, colored: false)
+        if let camera { preview.sceneView.pointOfView?.simdTransform = camera }
+    }
+}
+
 struct ProcessingSheet: View {
     let mesh: ScanMesh
     var onApply: (ScanMesh) -> Void
@@ -769,31 +911,57 @@ struct ExportSheet: View {
     @State private var working = false
     @State private var share: SharePayload?
     @State private var errorText: String?
+    @State private var format = "GLB"
 
     var body: some View {
         NavigationStack {
             List {
-                Section(L10n.exportCADUnits) {
+                Section("Format") {
+                    Picker("Choose format", selection: $format) {
+                        Text("3D model · GLB").tag("GLB")
+                        Text("3D model · USDZ").tag("USDZ")
+                        Text("3D model · OBJ").tag("OBJ")
+                        Text("3D printing · STL").tag("STL")
+                        Text("Point cloud · PLY").tag("PLY")
+                        Text("CAD · DXF").tag("DXF")
+                        Text("All exports").tag("ALL")
+                        if library.paths(for: scanID).exists(library.paths(for: scanID).frames) {
+                            Text("Original capture data").tag("FRAMES")
+                        }
+                        if library.paths(for: scanID).exists(library.paths(for: scanID).capture) {
+                            Text("Original USDZ").tag("ORIGINAL")
+                        }
+                    }
+                }
+                if format == "STL" || format == "DXF" {
+                  Section(L10n.exportCADUnits) {
                     Picker(L10n.exportSTLUnits, selection: $millimeters) {
                         Text(L10n.exportMillimeters).tag(true)
                         Text(L10n.exportMeters).tag(false)
                     }
                     .pickerStyle(.segmented)
                     Toggle(L10n.exportZUp, isOn: $zUp)
+                  }
                 }
-                exportRow(L10n.exportPLY, L10n.exportPLYDetail) { try await exportPLY() }
-                exportRow(L10n.exportOBJ, L10n.exportOBJDetail) { try await exportOBJ() }
-                exportRow(L10n.exportSTL, L10n.exportSTLDetail) { try await exportSTL() }
-                exportRow(L10n.exportDXF, L10n.exportDXFDetail) { try await exportDXF() }
-                exportRow(L10n.exportUSDZ, L10n.exportUSDZDetail) { try await exportUSDZ() }
-                exportRow(L10n.exportGLB, L10n.exportGLBDetail) { try await exportGLB() }
-                if library.paths(for: scanID).exists(library.paths(for: scanID).capture) {
-                    exportRow(L10n.exportOriginalUSDZ, L10n.exportOriginalDetail) { try await exportOriginal() }
+                Button {
+                    run {
+                        switch format {
+                        case "USDZ": try await exportUSDZ()
+                        case "OBJ": try await exportOBJ()
+                        case "STL": try await exportSTL()
+                        case "PLY": try await exportPLY()
+                        case "DXF": try await exportDXF()
+                        case "ALL": try await exportAll()
+                        case "FRAMES": try await exportFrames()
+                        case "ORIGINAL": try await exportOriginal()
+                        default: try await exportGLB()
+                        }
+                    }
+                } label: {
+                    Label("Share or Save to Files", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
                 }
-                exportRow(L10n.exportAll, L10n.exportAllDetail) { try await exportAll() }
-                if library.paths(for: scanID).exists(library.paths(for: scanID).frames) {
-                    exportRow(L10n.exportAllData, L10n.exportAllDataDetail) { try await exportFrames() }
-                }
+                .disabled(working)
                 if let errorText {
                     Text(errorText).foregroundStyle(AppColor.danger)
                 }

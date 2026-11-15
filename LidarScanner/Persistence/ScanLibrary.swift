@@ -248,6 +248,62 @@ final class ScanLibrary: ObservableObject {
         try? write(record)
     }
 
+    /// Geometry edits create an independent capture. Never reuse an atlas after
+    /// topology changes, and never mutate the source scan or its original files.
+    func saveRepairCopy(sourceID: UUID, mesh: ScanMesh) async throws -> UUID {
+        guard let source = record(sourceID) else { throw CocoaError(.fileNoSuchFile) }
+        let id = UUID()
+        let destination = paths(for: id)
+        let sourcePaths = paths(for: sourceID)
+        let newRecord = try await Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            try fm.createDirectory(at: destination.directory, withIntermediateDirectories: true)
+            do {
+                var repaired = mesh
+                repaired.uvs = []
+                let data = MeshIO.encode(repaired)
+                try data.write(to: destination.mesh, options: .atomic)
+                try data.write(to: destination.original, options: .atomic)
+                // Frames remain self-contained so Add Color can bake the NEW
+                // geometry. The previous texture bundle is deliberately excluded.
+                if sourcePaths.exists(sourcePaths.frames) {
+                    try fm.copyItem(at: sourcePaths.frames, to: destination.frames)
+                }
+                try MeshExporter.usdz(mesh: repaired, baked: nil, to: destination.preview, allowBake: false)
+                if let image = ThumbnailRenderer.image(mesh: repaired), let png = image.pngData() {
+                    try png.write(to: destination.thumbnail, options: .atomic)
+                }
+                var record = source
+                record.id = id
+                record.name = source.name + " · Repaired"
+                record.createdAt = Date()
+                record.updatedAt = record.createdAt
+                record.vertexCount = repaired.positions.count
+                record.triangleCount = repaired.triangleCount
+                record.surfaceArea = Double(repaired.surfaceArea())
+                let bounds = repaired.boundingBox()
+                record.boundsMin = [bounds.min.x, bounds.min.y, bounds.min.z]
+                record.boundsMax = [bounds.max.x, bounds.max.y, bounds.max.z]
+                record.isProcessed = true
+                record.isColored = false
+                record.hasColorFrames = false
+                record.hasKeyframes = destination.exists(destination.frames)
+                record.builtAvailable = false
+                record.showingBuilt = false
+                record.qualityApplied = false
+                // Metadata last: an incomplete copy is never shown in the library.
+                try JSONCoding.encoder.encode(record).write(to: destination.meta, options: .atomic)
+                return record
+            } catch {
+                try? fm.removeItem(at: destination.directory)
+                throw error
+            }
+        }.value
+        try write(newRecord)
+        thumbnails[id] = UIImage(contentsOfFile: destination.thumbnail.path)
+        return id
+    }
+
     func startAddingColor(to id: UUID) {
         guard record(id)?.hasKeyframes == true else {
             colorNotice = L10n.colorUnavailable
